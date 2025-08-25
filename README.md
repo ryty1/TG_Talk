@@ -29,7 +29,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/
 
 > 删除子机器人：
 
-- 在列表中选择 Bot → 点击“❌ 断开连接” → 停止子机器人并移除记录。
+- 在`我的机器人`列表中选择 Bot → 点击“❌ 断开连接” → 停止子机器人并移除记录。
 
 #### 3. 消息转发
 
