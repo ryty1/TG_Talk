@@ -41,6 +41,4 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/
 
 - Token 必须有效且唯一。
 
-- 宿主回复必须针对用户消息，否则无法映射。
-
-- VPS 或可靠环境长期运行。
+- VPS 或 可靠环境长期运行。
