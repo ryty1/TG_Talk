@@ -11,7 +11,7 @@ check_and_install() {
   PKG=$1
   if ! dpkg -s "$PKG" >/dev/null 2>&1; then
     echo "📦 安装 $PKG ..."
-    apt install -y "$PKG"
+    apt install -y -qq "$PKG" >/dev/null 2>&1
   else
     echo "✅ 已安装 $PKG，跳过"
   fi
@@ -19,7 +19,7 @@ check_and_install() {
 
 # ------------------ 系统依赖 ------------------
 echo "📦 1. 检查系统依赖..."
-apt update
+apt update -qq >/dev/null 2>&1
 check_and_install python3
 check_and_install python3-venv
 check_and_install python3-pip
@@ -33,7 +33,7 @@ cd "$APP_DIR"
 
 # ------------------ 下载脚本 ------------------
 echo "👾 3. 获取 $SCRIPT_NAME ..."
-curl -L -o "$SCRIPT_NAME" "$SCRIPT_URL"
+curl -sL -o "$SCRIPT_NAME" "$SCRIPT_URL"
 echo "  已下载最新 $SCRIPT_NAME"
 
 # ------------------ 虚拟环境 ------------------
@@ -45,20 +45,21 @@ source venv/bin/activate
 
 # ------------------ Python 依赖 ------------------
 echo "⬆️ 5. 检查 Python 依赖..."
-pip install --upgrade pip
+pip install --upgrade pip >/dev/null 2>&1
 
 # 检查 python-telegram-bot 是否已安装且版本=20.7
 PTB_VERSION=$(pip show python-telegram-bot 2>/dev/null | grep Version | awk '{print $2}' || true)
 if [ "$PTB_VERSION" != "20.7" ]; then
   echo "📦 安装 python-telegram-bot==20.7 ..."
-  pip install "python-telegram-bot==20.7"
+  pip install -q "python-telegram-bot==20.7"
 else
   echo "✅ 已安装 python-telegram-bot==20.7，跳过"
 fi
 
 # dotenv 如果没装就安装
 if ! pip show python-dotenv >/dev/null 2>&1; then
-  pip install python-dotenv
+  echo "📦 安装 python-dotenv ..."
+  pip install -q python-dotenv
 else
   echo "✅ 已安装 python-dotenv，跳过"
 fi
@@ -102,8 +103,8 @@ EOF
 
 # ------------------ 启动 ------------------
 echo "🚀 9. 启动 & 启用服务..."
-systemctl daemon-reload
-systemctl enable "$SERVICE_NAME"
+systemctl daemon-reload >/dev/null 2>&1
+systemctl enable "$SERVICE_NAME" >/dev/null 2>&1
 systemctl restart "$SERVICE_NAME"
 
 echo "✅ 完成！服务正在运行。查看状态："
