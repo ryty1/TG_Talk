@@ -45,5 +45,5 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/
 
 #### 5. 项目运营中心
 
-- 本项目快捷服务 @tg_multis_bot
+- 如自己不想部署，可直接使用本项目快捷服务 [双向托管机器人](https://t.me/tg_multis_bot)
 
