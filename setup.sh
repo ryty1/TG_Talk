@@ -107,19 +107,19 @@ EOF
 
   echo "🚀 启动并设置开机自启..."
   systemctl daemon-reload >/dev/null 2>&1
-  systemctl enable $SERVICE_NAME >/dev/null 2>&1
-  systemctl restart $SERVICE_NAME >/dev/null 2>&1
+  systemctl enable $SERVICE_NAME.service >/dev/null 2>&1
+  systemctl restart $SERVICE_NAME.service >/dev/null 2>&1
 
   echo "✅ 部署完成！使用命令查看日志："
-  echo "   journalctl -u $SERVICE_NAME -f"
+  echo "   journalctl -u $SERVICE_NAME.service -f"
 }
 
 function uninstall_bot() {
   echo "🛑 停止服务..."
-  systemctl stop $SERVICE_NAME >/dev/null 2>&1 || true
+  systemctl stop $SERVICE_NAME.service >/dev/null 2>&1 || true
 
   echo "❌ 禁用开机自启..."
-  systemctl disable $SERVICE_NAME >/dev/null 2>&1 || true
+  systemctl disable $SERVICE_NAME.service >/dev/null 2>&1 || true
 
   echo "🗑️ 删除 systemd 服务文件..."
   if [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
