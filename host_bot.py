@@ -448,7 +448,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("setforum_"):
         bot_username = data.split("_", 1)[1]
         context.user_data["waiting_forum_for"] = {"bot_username": bot_username}
-        await query.message.reply_text(f"💣 请先将 Bot 拉入话题群，给管理员权限\n\n㊙️ 请输入话题群 ID（给 @{bot_username} 使用）：")
+        await query.message.reply_text(f"💣 请先将 Bot 拉入话题群，给管理员权限\n-------------------------\n㊙️ 请输入话题群 ID（给 @{bot_username} 使用）：")
         return
 
     if data.startswith("del_"):
