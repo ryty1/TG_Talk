@@ -42,3 +42,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/
 - Token 必须有效且唯一。
 
 - VPS 或 可靠环境长期运行。
+
+#### 5. 项目运营中心
+
+- 本项目快捷服务 @tg_multis_bot
+
