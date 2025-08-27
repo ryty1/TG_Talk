@@ -13,7 +13,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/
 
 - 自动记录消息映射，保证回复准确送达。
 
-- 私聊模式/话题模式 切换
+- 私聊模式/话题模式 切换，/id 获取对应用户的基础资料
 
 #### 2. 管理操作
 
