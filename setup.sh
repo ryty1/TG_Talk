@@ -149,7 +149,7 @@ while true; do
   echo "============================"
   echo "1) 安装 Bot 管理平台"
   echo "2) 卸载 Bot 管理平台"
-  echo "3) 退出"
+  echo "3) 返回 VIP 工具箱"
   read -p "请选择操作 [1-3]: " choice
 
   case "$choice" in
@@ -160,8 +160,7 @@ while true; do
       uninstall_bot
       ;;
     3)
-      echo "退出脚本"
-      exit 0
+      bash <(curl -Ls https://raw.githubusercontent.com/ryty1/Checkin/refs/heads/main/vip.sh)
       ;;
     *)
       echo "❌ 无效选择，请输入 1-3"
