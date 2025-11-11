@@ -19,11 +19,13 @@ load_dotenv()
 # ================== 配置 ==================
 BOTS_FILE = "bots.json"
 MAP_FILE = "msg_map.json"
+BLACKLIST_FILE = "blacklist.json"  # 新增：黑名单文件
 ADMIN_CHANNEL = os.environ.get("ADMIN_CHANNEL")      # 宿主通知群/频道（可选）
 MANAGER_TOKEN = os.environ.get("MANAGER_TOKEN")      # 管理机器人 Token（必须）
 
 bots_data = {}
 msg_map = {}
+blacklist = {}  # 新增：黑名单数据 {"bot_username": [user_id1, user_id2, ...]}
 running_apps = {}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -53,6 +55,41 @@ def load_map():
 def save_map():
     with open(MAP_FILE, "w", encoding="utf-8") as f:
         json.dump(msg_map, f, ensure_ascii=False, indent=2)
+
+# 新增：黑名单管理
+def load_blacklist():
+    global blacklist
+    if os.path.exists(BLACKLIST_FILE):
+        with open(BLACKLIST_FILE, "r", encoding="utf-8") as f:
+            blacklist = json.load(f)
+    else:
+        blacklist = {}
+
+def save_blacklist():
+    with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
+        json.dump(blacklist, f, ensure_ascii=False, indent=2)
+
+def is_blacklisted(bot_username: str, user_id: int) -> bool:
+    """检查用户是否在黑名单中"""
+    return user_id in blacklist.get(bot_username, [])
+
+def add_to_blacklist(bot_username: str, user_id: int):
+    """添加用户到黑名单"""
+    if bot_username not in blacklist:
+        blacklist[bot_username] = []
+    if user_id not in blacklist[bot_username]:
+        blacklist[bot_username].append(user_id)
+        save_blacklist()
+        return True
+    return False
+
+def remove_from_blacklist(bot_username: str, user_id: int):
+    """从黑名单移除用户"""
+    if bot_username in blacklist and user_id in blacklist[bot_username]:
+        blacklist[bot_username].remove(user_id)
+        save_blacklist()
+        return True
+    return False
 
 def ensure_bot_map(bot_username: str):
     """保证 msg_map 结构存在"""
@@ -127,11 +164,17 @@ async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, owner_id: int, bot_username: str):
     """
     - 直连模式(direct):
-      用户私聊 -> 转发到 owner 私聊；owner 在私聊里“回复该条转发” -> 回到对应用户
+      用户私聊 -> 转发到 owner 私聊；owner 在私聊里"回复该条转发" -> 回到对应用户
     - 话题模式(forum):
-      用户私聊 -> 转发到话题群“用户专属话题”；群里该话题下的消息 -> 回到对应用户
+      用户私聊 -> 转发到话题群"用户专属话题"；群里该话题下的消息 -> 回到对应用户
     - /id 功能:
       只有 owner 可以用，显示目标用户信息
+    - /block 功能:
+      拉黑用户
+    - /unblock 功能:
+      解除拉黑
+    - /blocklist 功能:
+      查看黑名单
     """
     try:
         message = update.message
@@ -147,6 +190,100 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
         forum_group_id = bot_cfg.get("forum_group_id")
 
         ensure_bot_map(bot_username)
+
+        # ---------- /bl (blocklist) 功能 ----------
+        cmd = message.text.strip() if message.text else ""
+        if cmd and (cmd == "/bl" or cmd.startswith("/bl ") or cmd.startswith("/bl@") or 
+                    cmd == "/blocklist" or cmd.startswith("/blocklist ") or cmd.startswith("/blocklist@")):
+            if message.from_user.id != owner_id:
+                return
+
+            blocked_users = blacklist.get(bot_username, [])
+            if not blocked_users:
+                await message.reply_text("📋 黑名单为空")
+                return
+
+            text = f"📋 黑名单列表 (@{bot_username})：\n\n"
+            for idx, uid in enumerate(blocked_users, 1):
+                try:
+                    user = await context.bot.get_chat(uid)
+                    name = user.full_name or f"@{user.username}" if user.username else "匿名用户"
+                    text += f"{idx}. {name} (ID: <code>{uid}</code>)\n"
+                except:
+                    text += f"{idx}. 用户ID: <code>{uid}</code> (已删除账号)\n"
+
+            await message.reply_text(text, parse_mode="HTML")
+            return
+
+        # ---------- /b (block) 功能（拉黑用户）----------
+        if cmd and (cmd == "/b" or cmd.startswith("/b ") or cmd.startswith("/b@") or 
+                    cmd == "/block" or cmd.startswith("/block ") or cmd.startswith("/block@")):
+            if message.from_user.id != owner_id:
+                return
+
+            target_user = None
+
+            # 直连模式：主人私聊里，必须回复一条转发消息
+            if mode == "direct" and message.chat.type == "private" and chat_id == owner_id and message.reply_to_message:
+                direct_map = msg_map[bot_username]["direct"]
+                target_user = direct_map.get(str(message.reply_to_message.message_id))
+
+            # 话题模式：群里，必须回复某条消息
+            elif mode == "forum" and message.chat.id == forum_group_id and message.reply_to_message:
+                topic_id = message.reply_to_message.message_thread_id
+                for uid_str, t_id in msg_map[bot_username]["topics"].items():
+                    if t_id == topic_id:
+                        target_user = int(uid_str)
+                        break
+
+            if target_user:
+                if add_to_blacklist(bot_username, target_user):
+                    await message.reply_text(f"🚫 已将用户 {target_user} 加入黑名单")
+                    
+                    # 通知到管理频道
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    await send_admin_log(f"🚫 Bot @{bot_username} 拉黑用户 {target_user} · {now}")
+                else:
+                    await message.reply_text(f"⚠️ 用户 {target_user} 已在黑名单中")
+            else:
+                await message.reply_text("⚠️ 请回复要拉黑的用户消息")
+
+            return
+
+        # ---------- /ub (unblock) 功能（解除拉黑）----------
+        if cmd and (cmd == "/ub" or cmd.startswith("/ub ") or cmd.startswith("/ub@") or 
+                    cmd == "/unblock" or cmd.startswith("/unblock ") or cmd.startswith("/unblock@")):
+            if message.from_user.id != owner_id:
+                return
+
+            target_user = None
+
+            # 直连模式
+            if mode == "direct" and message.chat.type == "private" and chat_id == owner_id and message.reply_to_message:
+                direct_map = msg_map[bot_username]["direct"]
+                target_user = direct_map.get(str(message.reply_to_message.message_id))
+
+            # 话题模式
+            elif mode == "forum" and message.chat.id == forum_group_id and message.reply_to_message:
+                topic_id = message.reply_to_message.message_thread_id
+                for uid_str, t_id in msg_map[bot_username]["topics"].items():
+                    if t_id == topic_id:
+                        target_user = int(uid_str)
+                        break
+
+            if target_user:
+                if remove_from_blacklist(bot_username, target_user):
+                    await message.reply_text(f"✅ 已将用户 {target_user} 从黑名单移除")
+                    
+                    # 通知到管理频道
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    await send_admin_log(f"✅ Bot @{bot_username} 解除拉黑用户 {target_user} · {now}")
+                else:
+                    await message.reply_text(f"⚠️ 用户 {target_user} 不在黑名单中")
+            else:
+                await message.reply_text("⚠️ 请回复要解除拉黑的用户消息")
+
+            return
 
         # ---------- /id 功能 ----------
         if message.text and message.text.strip().startswith("/id"):
@@ -173,6 +310,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
             if target_user:
                 try:
                     user = await context.bot.get_chat(target_user)
+                    is_blocked = is_blacklisted(bot_username, user.id)
+                    status = "🚫 已拉黑" if is_blocked else "✅ 正常"
+                    
                     text = (
                         f"━━━━━━━━━━━━━━\n"
                         f"👤 <b>User Info</b>\n"
@@ -180,12 +320,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                         f"🆔 <b>TG_ID:</b> <code>{user.id}</code>\n"
                         f"👤 <b>全   名:</b> {user.first_name} {user.last_name or ''}\n"
                         f"🔗 <b>用户名:</b> @{user.username if user.username else '(无)'}\n"
+                        f"🛡 <b>状   态:</b> {status}\n"
                         f"━━━━━━━━━━━━━━"
                     )
 
-                    keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📋 复制 UID", switch_inline_query_current_chat=str(user.id))]
-                    ])
+                    # 根据拉黑状态显示不同按钮
+                    if is_blocked:
+                        keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅ 解除拉黑", callback_data=f"unblock_{bot_username}_{user.id}")],
+                            [InlineKeyboardButton("📋 复制 UID", switch_inline_query_current_chat=str(user.id))]
+                        ])
+                    else:
+                        keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🚫 拉黑用户", callback_data=f"block_{bot_username}_{user.id}")],
+                            [InlineKeyboardButton("📋 复制 UID", switch_inline_query_current_chat=str(user.id))]
+                        ])
 
                     await message.reply_text(
                         text,
@@ -197,6 +346,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                     await message.reply_text(f"❌ 获取用户信息失败: {e}")
 
             return  # ✅ 不提示、别人也用不了
+
+        # ---------- 黑名单拦截 ----------
+        if message.chat.type == "private" and chat_id != owner_id:
+            if is_blacklisted(bot_username, chat_id):
+                # 被拉黑用户发消息，静默忽略或返回提示
+                await reply_and_auto_delete(message, "⚠️ 你已被管理员拉黑，消息无法发送。", delay=5)
+                logger.info(f"拦截黑名单用户 {chat_id} 的消息 (@{bot_username})")
+                return
 
         # ---------- 直连模式 ----------
         if mode == "direct":
@@ -229,7 +386,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
         # ---------- 话题模式 ----------
         elif mode == "forum":
+            logger.info(f"[话题模式] Bot: @{bot_username}, forum_group_id: {forum_group_id}")
+            
             if not forum_group_id:
+                logger.warning(f"[话题模式] 未设置群ID，无法转发")
                 if message.chat.type == "private" and chat_id != owner_id:
                     await reply_and_auto_delete(message, "⚠️ 主人未设置话题群，暂无法转发。", delay=5)
                 return
@@ -238,6 +398,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
             # 普通用户发私聊 -> 转到对应话题
             if message.chat.type == "private" and chat_id != owner_id:
+                logger.info(f"[话题模式] 收到用户 {chat_id} 的私聊消息，准备转发到群 {forum_group_id}")
                 uid_key = str(chat_id)
                 topic_id = topics.get(uid_key)
 
@@ -263,12 +424,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
                 # 转发到话题
                 try:
+                    logger.info(f"[话题模式] 转发消息到话题 {topic_id}")
                     await context.bot.forward_message(
                         chat_id=forum_group_id,
                         from_chat_id=chat_id,
                         message_id=message.message_id,
                         message_thread_id=topic_id
                     )
+                    logger.info(f"[话题模式] 转发成功")
                     await reply_and_auto_delete(message, "✅ 已转交客服处理", delay=2)
 
                 except BadRequest as e:
@@ -307,6 +470,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
             # 群里该话题下的消息 -> 回到用户
             if message.chat.id == forum_group_id and getattr(message, "is_topic_message", False):
                 topic_id = message.message_thread_id
+                logger.info(f"[话题模式] 收到群消息，topic_id: {topic_id}, 查找对应用户")
                 target_uid = None
                 for uid_str, t_id in topics.items():
                     if t_id == topic_id:
@@ -314,13 +478,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                         break
                 if target_uid:
                     try:
+                        logger.info(f"[话题模式] 找到用户 {target_uid}，准备发送")
                         await context.bot.copy_message(
                             chat_id=target_uid,
                             from_chat_id=forum_group_id,
                             message_id=message.message_id
                         )
+                        logger.info(f"[话题模式] 回复发送成功")
                     except Exception as e:
                         logger.error(f"群->用户 复制失败: {e}")
+                else:
+                    logger.warning(f"[话题模式] 未找到 topic_id {topic_id} 对应的用户")
                 return
 
     except Exception as e:
@@ -401,7 +569,9 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ 已添加并启动 Bot：@{bot_username}\n\n"
-        f"🎯 默认模式：私聊模式\n\n🔬 可在“我的机器人 → 进入Bot → 切换模式\n\n💡 话题模式 必须 设置话题群ID。"
+        f"🎯 默认模式：私聊模式\n\n"
+        f"🔬 可在\"我的机器人 → 进入Bot → 切换模式\"\n\n"
+        f"💡 话题模式 必须 设置话题群ID。"
     )
 
     # 🔔 添加通知
@@ -419,6 +589,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
     await query.answer()
+
+    # 新增：处理拉黑/解除拉黑按钮
+    if data.startswith("block_") or data.startswith("unblock_"):
+        parts = data.split("_")
+        action = parts[0]  # "block" or "unblock"
+        bot_username = parts[1]
+        user_id = int(parts[2])
+
+        if action == "block":
+            if add_to_blacklist(bot_username, user_id):
+                await query.message.edit_text(f"🚫 已将用户 {user_id} 加入黑名单")
+                now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                await send_admin_log(f"🚫 Bot @{bot_username} 拉黑用户 {user_id} · {now}")
+            else:
+                await query.message.edit_text(f"⚠️ 用户 {user_id} 已在黑名单中")
+        else:  # unblock
+            if remove_from_blacklist(bot_username, user_id):
+                await query.message.edit_text(f"✅ 已将用户 {user_id} 从黑名单移除")
+                now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                await send_admin_log(f"✅ Bot @{bot_username} 解除拉黑用户 {user_id} · {now}")
+            else:
+                await query.message.edit_text(f"⚠️ 用户 {user_id} 不在黑名单中")
+        return
 
     if data == "addbot":
         await query.message.reply_text("㊙️ 请输入要添加的 Bot Token：")
@@ -456,6 +649,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         mode_label = "私聊" if target_bot.get("mode", "direct") == "direct" else "话题"
         forum_gid = target_bot.get("forum_group_id")
+        blocked_count = len(blacklist.get(bot_username, []))
+        
         info_text = (
             f"🤖 Bot: @{bot_username}\n"
             f"🔑 Token: {target_bot['token'][:10]}... （已隐藏）\n"
@@ -463,7 +658,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🆔 用户ID: {owner_id}\n"
             f"⏰ 创建时间: {target_bot.get('created_at', '未知')}\n"
             f"📡 当前模式: {mode_label} 模式\n"
-            f"🏷 群ID: {forum_gid if forum_gid else '未设置'}"
+            f"🏷 群ID: {forum_gid if forum_gid else '未设置'}\n"
+            f"🚫 黑名单: {blocked_count} 个用户"
         )
 
         keyboard = [
@@ -489,7 +685,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if mode == "forum" and not target_bot.get("forum_group_id"):
             await reply_and_auto_delete(
                 query.message,
-                "⚠️ 请先“🛠 设置 话题群ID”。",
+                "⚠️ 请先\"🛠 设置 话题群ID\"。",
                 delay=10
             )
             return
@@ -553,6 +749,7 @@ async def run_all_bots():
 
     load_bots()
     load_map()
+    load_blacklist()  # 新增：加载黑名单
 
     # 启动子 bot（恢复）
     for owner_id, info in bots_data.items():
