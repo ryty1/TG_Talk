@@ -3,6 +3,8 @@ import os
 import json
 import logging
 import asyncio
+import random
+import string
 from datetime import datetime
 from functools import partial
 from telegram import (
@@ -20,12 +22,15 @@ load_dotenv()
 BOTS_FILE = "bots.json"
 MAP_FILE = "msg_map.json"
 BLACKLIST_FILE = "blacklist.json"  # 新增：黑名单文件
+VERIFIED_FILE = "verified_users.json"  # 新增：已验证用户文件
 ADMIN_CHANNEL = os.environ.get("ADMIN_CHANNEL")      # 宿主通知群/频道（可选）
 MANAGER_TOKEN = os.environ.get("MANAGER_TOKEN")      # 管理机器人 Token（必须）
 
 bots_data = {}
 msg_map = {}
 blacklist = {}  # 新增：黑名单数据 {"bot_username": [user_id1, user_id2, ...]}
+verified_users = {}  # 新增：已验证用户 {"bot_username": [user_id1, user_id2, ...]}
+pending_verifications = {}  # 新增：待验证用户 {"bot_username_user_id": "验证码"}
 running_apps = {}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -68,6 +73,96 @@ def load_blacklist():
 def save_blacklist():
     with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
         json.dump(blacklist, f, ensure_ascii=False, indent=2)
+
+# 新增：验证用户管理
+def load_verified_users():
+    global verified_users
+    if os.path.exists(VERIFIED_FILE):
+        with open(VERIFIED_FILE, "r", encoding="utf-8") as f:
+            verified_users = json.load(f)
+    else:
+        verified_users = {}
+
+def save_verified_users():
+    with open(VERIFIED_FILE, "w", encoding="utf-8") as f:
+        json.dump(verified_users, f, ensure_ascii=False, indent=2)
+
+def is_verified(bot_username: str, user_id: int) -> bool:
+    """检查用户是否已验证"""
+    return user_id in verified_users.get(bot_username, [])
+
+def add_verified_user(bot_username: str, user_id: int):
+    """添加已验证用户"""
+    if bot_username not in verified_users:
+        verified_users[bot_username] = []
+    if user_id not in verified_users[bot_username]:
+        verified_users[bot_username].append(user_id)
+        save_verified_users()
+
+def generate_captcha() -> dict:
+    """生成复杂验证码（多种类型）"""
+    captcha_type = random.choice(['math', 'sequence', 'mixed'])
+    
+    if captcha_type == 'math':
+        # 数学运算验证码
+        operators = ['+', '-', '*']
+        op = random.choice(operators)
+        if op == '+':
+            a, b = random.randint(10, 99), random.randint(10, 99)
+            answer = str(a + b)
+            question = f"{a} + {b} = ?"
+        elif op == '-':
+            a, b = random.randint(50, 99), random.randint(10, 49)
+            answer = str(a - b)
+            question = f"{a} - {b} = ?"
+        else:  # *
+            a, b = random.randint(2, 12), random.randint(2, 12)
+            answer = str(a * b)
+            question = f"{a} × {b} = ?"
+        
+        return {
+            'type': 'math',
+            'question': question,
+            'answer': answer
+        }
+    
+    elif captcha_type == 'sequence':
+        # 数字序列验证码（找规律）
+        patterns = [
+            # 等差数列
+            lambda: {
+                'seq': (start := random.randint(1, 10), d := random.randint(2, 5)),
+                'nums': [start + i*d for i in range(4)],
+                'answer': str(start + 4*d)
+            },
+            # 等比数列
+            lambda: {
+                'seq': (start := random.randint(2, 5), r := random.randint(2, 3)),
+                'nums': [start * (r**i) for i in range(4)],
+                'answer': str(start * (r**4))
+            }
+        ]
+        pattern = random.choice(patterns)()
+        question = f"找规律填空：{', '.join(map(str, pattern['nums']))}, ?"
+        
+        return {
+            'type': 'sequence',
+            'question': question,
+            'answer': pattern['answer']
+        }
+    
+    else:  # mixed
+        # 混合字符验证码（6位，大小写字母+数字，避免混淆字符）
+        # 去除容易混淆的字符：0OoIl1
+        chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghjkmnpqrstuvwxyz'
+        code = ''.join(random.choices(chars, k=6))
+        
+        return {
+            'type': 'mixed',
+            'question': f"请输入验证码（区分大小写）",
+            'answer': code,
+            'display': code  # 用于显示的验证码
+        }
 
 def is_blacklisted(bot_username: str, user_id: int) -> bool:
     """检查用户是否在黑名单中"""
@@ -145,20 +240,59 @@ async def manager_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================== 子机器人 /start ==================
 async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 欢迎使用客服 Bot\n\n"
-        "--------------------------\n"
-        "✨ 核心功能\n"
-        "* 多机器人接入：只需提供 Token，即可快速启用。\n\n"
-        "* 两种模式：\n"
-        "  ▸ 私聊模式 —— 用户消息直接转发到bot。\n"
-        "  ▸ 话题模式 —— 每个用户自动建立独立话题，消息更清晰。\n\n"
-        "* 智能映射：自动维护消息与话题的对应关系。\n"
-        "---------------------------\n"
-        "- 客服bot托管中心 @tg_multis_bot \n"
-        "---------------------------\n\n"
-        "请直接输入消息，主人收到就会回复你"
-    )
+    """子机器人的 /start 命令，发送验证码或欢迎消息"""
+    user_id = update.message.from_user.id
+    bot_username = context.bot.username
+    
+    # 如果用户已验证，显示欢迎信息
+    if is_verified(bot_username, user_id):
+        await update.message.reply_text(
+            "👋 欢迎回来！\n\n"
+            "--------------------------\n"
+            "✨ 核心功能\n"
+            "* 多机器人接入：只需提供 Token，即可快速启用。\n\n"
+            "* 两种模式：\n"
+            "  ▸ 私聊模式 —— 用户消息直接转发到bot。\n"
+            "  ▸ 话题模式 —— 每个用户自动建立独立话题，消息更清晰。\n\n"
+            "* 智能映射：自动维护消息与话题的对应关系。\n"
+            "---------------------------\n"
+            "- 客服bot托管中心 @tg_multis_bot \n"
+            "---------------------------\n\n"
+            "请直接输入消息，主人收到就会回复你"
+        )
+    else:
+        # 生成验证码并发送
+        captcha_data = generate_captcha()
+        verification_key = f"{bot_username}_{user_id}"
+        pending_verifications[verification_key] = captcha_data['answer']
+        
+        # 根据验证码类型构建消息
+        if captcha_data['type'] == 'math':
+            message_text = (
+                f"🔐 数学验证\n\n"
+                f"欢迎使用本机器人！\n"
+                f"为防止滥用，首次使用需要验证。\n\n"
+                f"📝 请计算：<b>{captcha_data['question']}</b>\n\n"
+                f"💡 提示：请输入计算结果（纯数字）"
+            )
+        elif captcha_data['type'] == 'sequence':
+            message_text = (
+                f"🔐 逻辑验证\n\n"
+                f"欢迎使用本机器人！\n"
+                f"为防止滥用，首次使用需要验证。\n\n"
+                f"📝 {captcha_data['question']}\n\n"
+                f"💡 提示：观察规律，填入下一个数字"
+            )
+        else:  # mixed
+            message_text = (
+                f"🔐 验证码验证\n\n"
+                f"欢迎使用本机器人！\n"
+                f"为防止滥用，首次使用需要验证。\n\n"
+                f"📝 你的验证码：<code>{captcha_data['display']}</code>\n\n"
+                f"💡 {captcha_data['question']}"
+            )
+        
+        await update.message.reply_text(message_text, parse_mode="HTML")
 
 # ================== 消息转发逻辑（直连/话题 可切换） ==================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, owner_id: int, bot_username: str):
@@ -360,6 +494,78 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                     await message.reply_text(f"❌ 获取用户信息失败: {e}")
 
             return  # ✅ 不提示、别人也用不了
+
+        # ---------- 验证码检查（普通用户） ----------
+        if message.chat.type == "private" and chat_id != owner_id:
+            user_id = message.from_user.id
+            verification_key = f"{bot_username}_{user_id}"
+            
+            # 如果用户未验证
+            if not is_verified(bot_username, user_id):
+                # 检查是否有待验证的验证码
+                if verification_key in pending_verifications:
+                    expected_captcha = pending_verifications[verification_key]
+                    user_input = message.text.strip() if message.text else ""
+                    
+                    # 验证码正确
+                    if user_input == expected_captcha:
+                        add_verified_user(bot_username, user_id)
+                        pending_verifications.pop(verification_key, None)
+                        
+                        await message.reply_text(
+                            "✅ 验证成功！\n\n"
+                            "欢迎使用客服 Bot\n"
+                            "请直接输入消息，主人收到就会回复你"
+                        )
+                        
+                        # 通知管理员
+                        user_name = message.from_user.full_name or f"@{message.from_user.username}" if message.from_user.username else "匿名用户"
+                        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        await send_admin_log(f"✅ 新用户验证成功\n👤 {user_name} (ID: {user_id})\n🤖 Bot: @{bot_username}\n⏰ {now}")
+                        
+                        return
+                    else:
+                        # 验证码错误
+                        await reply_and_auto_delete(
+                            message, 
+                            f"❌ 验证码错误！\n\n正确的验证码是：<code>{expected_captcha}</code>\n\n请重新输入", 
+                            delay=8,
+                            parse_mode="HTML"
+                        )
+                        return
+                else:
+                    # 没有待验证的验证码，生成新的
+                    captcha_data = generate_captcha()
+                    pending_verifications[verification_key] = captcha_data['answer']
+                    
+                    # 根据验证码类型构建消息
+                    if captcha_data['type'] == 'math':
+                        message_text = (
+                            f"🔐 数学验证\n\n"
+                            f"你还未通过验证，无法发送消息。\n\n"
+                            f"📝 请计算：<b>{captcha_data['question']}</b>\n\n"
+                            f"💡 提示：请输入计算结果（纯数字）\n"
+                            f"或发送 /start 重新获取验证题"
+                        )
+                    elif captcha_data['type'] == 'sequence':
+                        message_text = (
+                            f"🔐 逻辑验证\n\n"
+                            f"你还未通过验证，无法发送消息。\n\n"
+                            f"📝 {captcha_data['question']}\n\n"
+                            f"💡 提示：观察规律，填入下一个数字\n"
+                            f"或发送 /start 重新获取验证题"
+                        )
+                    else:  # mixed
+                        message_text = (
+                            f"🔐 验证码验证\n\n"
+                            f"你还未通过验证，无法发送消息。\n\n"
+                            f"📝 你的验证码：<code>{captcha_data['display']}</code>\n\n"
+                            f"💡 {captcha_data['question']}\n"
+                            f"或发送 /start 重新获取验证码"
+                        )
+                    
+                    await message.reply_text(message_text, parse_mode="HTML")
+                    return
 
         # ---------- 黑名单拦截 ----------
         if message.chat.type == "private" and chat_id != owner_id:
@@ -764,6 +970,7 @@ async def run_all_bots():
     load_bots()
     load_map()
     load_blacklist()  # 新增：加载黑名单
+    load_verified_users()  # 新增：加载已验证用户
 
     # 启动子 bot（恢复）
     for owner_id, info in bots_data.items():
