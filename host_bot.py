@@ -100,25 +100,39 @@ def add_verified_user(bot_username: str, user_id: int):
         save_verified_users()
 
 def generate_captcha() -> dict:
-    """生成复杂验证码（多种类型）"""
-    captcha_type = random.choice(['math', 'sequence', 'mixed'])
+    """生成复杂验证码（多种类型）- 完全免费"""
+    captcha_type = random.choice(['math', 'sequence', 'chinese', 'emoji', 'logic', 'time'])
     
     if captcha_type == 'math':
-        # 数学运算验证码
-        operators = ['+', '-', '*']
-        op = random.choice(operators)
-        if op == '+':
-            a, b = random.randint(10, 99), random.randint(10, 99)
-            answer = str(a + b)
-            question = f"{a} + {b} = ?"
-        elif op == '-':
-            a, b = random.randint(50, 99), random.randint(10, 49)
-            answer = str(a - b)
-            question = f"{a} - {b} = ?"
-        else:  # *
-            a, b = random.randint(2, 12), random.randint(2, 12)
-            answer = str(a * b)
-            question = f"{a} × {b} = ?"
+        # 数学运算验证码（升级版：支持多步运算）
+        style = random.choice(['simple', 'complex'])
+        if style == 'simple':
+            operators = ['+', '-', '*']
+            op = random.choice(operators)
+            if op == '+':
+                a, b = random.randint(10, 99), random.randint(10, 99)
+                answer = str(a + b)
+                question = f"{a} + {b} = ?"
+            elif op == '-':
+                a, b = random.randint(50, 99), random.randint(10, 49)
+                answer = str(a - b)
+                question = f"{a} - {b} = ?"
+            else:  # *
+                a, b = random.randint(2, 12), random.randint(2, 12)
+                answer = str(a * b)
+                question = f"{a} × {b} = ?"
+        else:  # complex - 两步运算
+            a, b, c = random.randint(5, 20), random.randint(2, 10), random.randint(2, 10)
+            ops = random.choice([
+                ('+', '*'),  # 先乘后加
+                ('-', '+'),  # 混合
+            ])
+            if ops == ('+', '*'):
+                answer = str(a + b * c)
+                question = f"{a} + {b} × {c} = ?"
+            else:
+                answer = str(a - b + c)
+                question = f"{a} - {b} + {c} = ?"
         
         return {
             'type': 'math',
@@ -131,19 +145,25 @@ def generate_captcha() -> dict:
         patterns = [
             # 等差数列
             lambda: {
-                'seq': (start := random.randint(1, 10), d := random.randint(2, 5)),
-                'nums': [start + i*d for i in range(4)],
+                'nums': (start := random.randint(1, 10), d := random.randint(2, 5)),
+                'seq': [start + i*d for i in range(4)],
                 'answer': str(start + 4*d)
             },
             # 等比数列
             lambda: {
-                'seq': (start := random.randint(2, 5), r := random.randint(2, 3)),
-                'nums': [start * (r**i) for i in range(4)],
+                'nums': (start := random.randint(2, 5), r := random.randint(2, 3)),
+                'seq': [start * (r**i) for i in range(4)],
                 'answer': str(start * (r**4))
+            },
+            # 平方数列
+            lambda: {
+                'nums': (start := random.randint(1, 5),),
+                'seq': [(start + i)**2 for i in range(4)],
+                'answer': str((start + 4)**2)
             }
         ]
         pattern = random.choice(patterns)()
-        question = f"找规律填空：{', '.join(map(str, pattern['nums']))}, ?"
+        question = f"找规律填空：{', '.join(map(str, pattern['seq']))}, ?"
         
         return {
             'type': 'sequence',
@@ -151,17 +171,137 @@ def generate_captcha() -> dict:
             'answer': pattern['answer']
         }
     
-    else:  # mixed
-        # 混合字符验证码（6位，大小写字母+数字，避免混淆字符）
-        # 去除容易混淆的字符：0OoIl1
-        chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghjkmnpqrstuvwxyz'
-        code = ''.join(random.choices(chars, k=6))
+    elif captcha_type == 'chinese':
+        # 中文数字验证码（防机器人效果极佳）
+        chinese_nums = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+        num = random.randint(10, 99)
+        chinese_form = chinese_nums[num // 10] + '十' + (chinese_nums[num % 10] if num % 10 != 0 else '')
+        if num // 10 == 1:
+            chinese_form = '十' + (chinese_nums[num % 10] if num % 10 != 0 else '')
         
         return {
-            'type': 'mixed',
-            'question': f"请输入验证码（区分大小写）",
-            'answer': code,
-            'display': code  # 用于显示的验证码
+            'type': 'chinese',
+            'question': f"请将中文数字转为阿拉伯数字",
+            'answer': str(num),
+            'display': chinese_form
+        }
+    
+    elif captcha_type == 'emoji':
+        # Emoji 数学验证码（趣味性高）
+        emoji_map = {
+            '🍎': random.randint(1, 9),
+            '🍌': random.randint(1, 9),
+            '🍇': random.randint(1, 9),
+        }
+        emoji_list = list(emoji_map.keys())
+        
+        # 生成简单的emoji算式
+        e1, e2 = random.sample(emoji_list, 2)
+        op = random.choice(['+', '-'])
+        
+        if op == '+':
+            answer = str(emoji_map[e1] + emoji_map[e2])
+            question = f"{e1} = {emoji_map[e1]}\n{e2} = {emoji_map[e2]}\n\n{e1} + {e2} = ?"
+        else:
+            if emoji_map[e1] < emoji_map[e2]:
+                e1, e2 = e2, e1
+            answer = str(emoji_map[e1] - emoji_map[e2])
+            question = f"{e1} = {emoji_map[e1]}\n{e2} = {emoji_map[e2]}\n\n{e1} - {e2} = ?"
+        
+        return {
+            'type': 'emoji',
+            'question': question,
+            'answer': answer
+        }
+    
+    elif captcha_type == 'logic':
+        # 逻辑推理验证码
+        logic_puzzles = [
+            # 年龄问题
+            {
+                'question': lambda: (
+                    age := random.randint(8, 15),
+                    f"小明今年{age}岁，5年后他多少岁？"
+                )[1],
+                'answer': lambda age=random.randint(8, 15): str(age + 5)
+            },
+            # 时间问题
+            {
+                'question': lambda: (
+                    hours := random.randint(2, 5),
+                    f"现在是上午10点，{hours}小时后是几点？（只填数字，如：15）"
+                )[1],
+                'answer': lambda hours=random.randint(2, 5): str(10 + hours)
+            },
+            # 数量问题
+            {
+                'question': lambda: (
+                    apples := random.randint(5, 12),
+                    eat := random.randint(2, 4),
+                    f"小红有{apples}个苹果，吃了{eat}个，还剩几个？"
+                )[1],
+                'answer': lambda apples=random.randint(5, 12), eat=random.randint(2, 4): str(apples - eat)
+            }
+        ]
+        
+        # 简化逻辑题
+        scenarios = [
+            (lambda: random.randint(8, 15), lambda age: f"小明今年{age}岁，5年后他多少岁？", lambda age: str(age + 5)),
+            (lambda: random.randint(2, 5), lambda h: f"现在是10点，{h}小时后几点？", lambda h: str(10 + h)),
+            (lambda: (random.randint(8, 15), random.randint(2, 5)), lambda x: f"有{x[0]}个，吃{x[1]}个，剩几个？", lambda x: str(x[0] - x[1])),
+        ]
+        
+        scenario = random.choice(scenarios)
+        value = scenario[0]()
+        question = scenario[1](value)
+        answer = scenario[2](value)
+        
+        return {
+            'type': 'logic',
+            'question': question,
+            'answer': answer
+        }
+    
+    else:  # time
+        # 时间识别验证码 - 修复版：明确上午/下午/晚上
+        minute = random.choice([0, 15, 30, 45])
+        
+        # 根据时间段选择合适的小时
+        period = random.choice(['上午', '下午', '晚上'])
+        
+        if period == '上午':
+            # 上午：6点-11点 (06:00-11:59)
+            hour_12 = random.randint(6, 11)
+            hour_24 = hour_12
+        elif period == '下午':
+            # 下午：12点-5点 (12:00-17:59)
+            hour_12 = random.randint(12, 5) if random.random() < 0.5 else random.choice([12, 1, 2, 3, 4, 5])
+            hour_12 = random.choice([12, 1, 2, 3, 4, 5])
+            hour_24 = hour_12 if hour_12 == 12 else hour_12 + 12
+        else:  # 晚上
+            # 晚上：6点-11点 (18:00-23:59)
+            hour_12 = random.randint(6, 11)
+            hour_24 = hour_12 + 12
+        
+        # 中文数字
+        hour_cn = ['十二', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一'][hour_12-1]
+        
+        # 中文表达时间
+        time_str = f"{period}{hour_cn}点"
+        if minute == 15:
+            time_str += "一刻"
+        elif minute == 30:
+            time_str += "半"
+        elif minute == 45:
+            time_str += "三刻"
+        
+        answer = f"{hour_24:02d}:{minute:02d}"
+        
+        return {
+            'type': 'time',
+            'question': f"请用24小时制表示（格式：HH:MM）",
+            'answer': answer,
+            'display': time_str
         }
 
 def is_blacklisted(bot_username: str, user_id: int) -> bool:
@@ -267,30 +407,52 @@ async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_verifications[verification_key] = captcha_data['answer']
         
         # 根据验证码类型构建消息
-        if captcha_data['type'] == 'math':
-            message_text = (
+        message_templates = {
+            'math': (
                 f"🔐 数学验证\n\n"
                 f"欢迎使用本机器人！\n"
                 f"为防止滥用，首次使用需要验证。\n\n"
                 f"📝 请计算：<b>{captcha_data['question']}</b>\n\n"
                 f"💡 提示：请输入计算结果（纯数字）"
-            )
-        elif captcha_data['type'] == 'sequence':
-            message_text = (
+            ),
+            'sequence': (
                 f"🔐 逻辑验证\n\n"
                 f"欢迎使用本机器人！\n"
                 f"为防止滥用，首次使用需要验证。\n\n"
                 f"📝 {captcha_data['question']}\n\n"
                 f"💡 提示：观察规律，填入下一个数字"
-            )
-        else:  # mixed
-            message_text = (
-                f"🔐 验证码验证\n\n"
+            ),
+            'chinese': (
+                f"🔐 中文数字验证\n\n"
                 f"欢迎使用本机器人！\n"
                 f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 你的验证码：<code>{captcha_data['display']}</code>\n\n"
+                f"📝 中文数字：<b>{captcha_data['display']}</b>\n\n"
+                f"💡 {captcha_data['question']}"
+            ),
+            'emoji': (
+                f"🔐 趣味验证\n\n"
+                f"欢迎使用本机器人！\n"
+                f"为防止滥用，首次使用需要验证。\n\n"
+                f"📝 {captcha_data['question']}\n\n"
+                f"💡 提示：仔细观察emoji对应的数字"
+            ),
+            'logic': (
+                f"🔐 智力验证\n\n"
+                f"欢迎使用本机器人！\n"
+                f"为防止滥用，首次使用需要验证。\n\n"
+                f"📝 {captcha_data['question']}\n\n"
+                f"💡 提示：简单的逻辑题，输入数字答案"
+            ),
+            'time': (
+                f"🔐 时间验证\n\n"
+                f"欢迎使用本机器人！\n"
+                f"为防止滥用，首次使用需要验证。\n\n"
+                f"📝 时间：<b>{captcha_data['display']}</b>\n\n"
                 f"💡 {captcha_data['question']}"
             )
+        }
+        
+        message_text = message_templates.get(captcha_data['type'], message_templates['math'])
         
         await update.message.reply_text(message_text, parse_mode="HTML")
 
@@ -500,6 +662,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
             user_id = message.from_user.id
             verification_key = f"{bot_username}_{user_id}"
             
+            logger.info(f"[验证检查] Bot: @{bot_username}, 用户: {user_id}, 已验证: {is_verified(bot_username, user_id)}")
+            
             # 如果用户未验证
             if not is_verified(bot_username, user_id):
                 # 检查是否有待验证的验证码
@@ -507,14 +671,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                     expected_captcha = pending_verifications[verification_key]
                     user_input = message.text.strip() if message.text else ""
                     
+                    logger.info(f"[验证码输入] 用户 {user_id} 输入: '{user_input}', 期望: '{expected_captcha}'")
+                    
                     # 验证码正确
                     if user_input == expected_captcha:
                         add_verified_user(bot_username, user_id)
                         pending_verifications.pop(verification_key, None)
                         
                         await message.reply_text(
-                            "✅ 验证成功！\n\n"
-                            "欢迎使用客服 Bot\n"
+                            "👋 欢迎回来！\n\n"
+                            "--------------------------\n"
+                            "✨ 核心功能\n"
+                            "* 多机器人接入：只需提供 Token，即可快速启用。\n\n"
+                            "* 两种模式：\n"
+                            "  ▸ 私聊模式 —— 用户消息直接转发到bot。\n"
+                            "  ▸ 话题模式 —— 每个用户自动建立独立话题，消息更清晰。\n\n"
+                            "* 智能映射：自动维护消息与话题的对应关系。\n"
+                            "---------------------------\n"
+                            "- 客服bot托管中心 @tg_multis_bot \n"
+                            "---------------------------\n\n"
                             "请直接输入消息，主人收到就会回复你"
                         )
                         
@@ -525,44 +700,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                         
                         return
                     else:
-                        # 验证码错误
+                        # 验证码错误 - 不显示正确答案！
                         await reply_and_auto_delete(
                             message, 
-                            f"❌ 验证码错误！\n\n正确的验证码是：<code>{expected_captcha}</code>\n\n请重新输入", 
-                            delay=8,
-                            parse_mode="HTML"
+                            f"❌ 验证码错误！\n\n请仔细检查后重新输入\n或发送 /start 获取新的验证题", 
+                            delay=5
                         )
                         return
                 else:
                     # 没有待验证的验证码，生成新的
+                    logger.info(f"[生成验证码] 用户 {user_id} 首次发送消息，生成验证码")
                     captcha_data = generate_captcha()
                     pending_verifications[verification_key] = captcha_data['answer']
+                    logger.info(f"[验证码] 类型: {captcha_data['type']}, 答案: {captcha_data['answer']}")
                     
                     # 根据验证码类型构建消息
-                    if captcha_data['type'] == 'math':
-                        message_text = (
-                            f"🔐 数学验证\n\n"
-                            f"你还未通过验证，无法发送消息。\n\n"
-                            f"📝 请计算：<b>{captcha_data['question']}</b>\n\n"
-                            f"💡 提示：请输入计算结果（纯数字）\n"
-                            f"或发送 /start 重新获取验证题"
-                        )
-                    elif captcha_data['type'] == 'sequence':
-                        message_text = (
-                            f"🔐 逻辑验证\n\n"
-                            f"你还未通过验证，无法发送消息。\n\n"
-                            f"📝 {captcha_data['question']}\n\n"
-                            f"💡 提示：观察规律，填入下一个数字\n"
-                            f"或发送 /start 重新获取验证题"
-                        )
-                    else:  # mixed
-                        message_text = (
-                            f"🔐 验证码验证\n\n"
-                            f"你还未通过验证，无法发送消息。\n\n"
-                            f"📝 你的验证码：<code>{captcha_data['display']}</code>\n\n"
-                            f"💡 {captcha_data['question']}\n"
-                            f"或发送 /start 重新获取验证码"
-                        )
+                    retry_templates = {
+                        'math': f"🔐 数学验证\n\n你还未通过验证。\n\n📝 请计算：<b>{captcha_data['question']}</b>\n\n💡 输入计算结果或 /start 换题",
+                        'sequence': f"🔐 逻辑验证\n\n你还未通过验证。\n\n📝 {captcha_data['question']}\n\n💡 观察规律或 /start 换题",
+                        'chinese': f"🔐 中文数字验证\n\n你还未通过验证。\n\n📝 中文数字：<b>{captcha_data['display']}</b>\n\n💡 {captcha_data['question']}或 /start 换题",
+                        'emoji': f"🔐 趣味验证\n\n你还未通过验证。\n\n📝 {captcha_data['question']}\n\n💡 仔细观察或 /start 换题",
+                        'logic': f"🔐 智力验证\n\n你还未通过验证。\n\n📝 {captcha_data['question']}\n\n💡 简单逻辑题或 /start 换题",
+                        'time': f"🔐 时间验证\n\n你还未通过验证。\n\n📝 时间：<b>{captcha_data['display']}</b>\n\n💡 {captcha_data['question']}或 /start 换题"
+                    }
+                    
+                    message_text = retry_templates.get(captcha_data['type'], retry_templates['math'])
                     
                     await message.reply_text(message_text, parse_mode="HTML")
                     return
