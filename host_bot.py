@@ -223,18 +223,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
             target_user = None
 
-            # 直连模式：主人私聊里，必须回复一条转发消息
-            if mode == "direct" and message.chat.type == "private" and chat_id == owner_id and message.reply_to_message:
-                direct_map = msg_map[bot_username]["direct"]
-                target_user = direct_map.get(str(message.reply_to_message.message_id))
+            # 方式1：直接输入 TG ID（如：/b 123456789）
+            parts = cmd.split()
+            if len(parts) == 2 and parts[1].isdigit():
+                target_user = int(parts[1])
+            
+            # 方式2：回复消息
+            elif message.reply_to_message:
+                # 直连模式：主人私聊里，回复转发消息
+                if mode == "direct" and message.chat.type == "private" and chat_id == owner_id:
+                    direct_map = msg_map[bot_username]["direct"]
+                    target_user = direct_map.get(str(message.reply_to_message.message_id))
 
-            # 话题模式：群里，必须回复某条消息
-            elif mode == "forum" and message.chat.id == forum_group_id and message.reply_to_message:
-                topic_id = message.reply_to_message.message_thread_id
-                for uid_str, t_id in msg_map[bot_username]["topics"].items():
-                    if t_id == topic_id:
-                        target_user = int(uid_str)
-                        break
+                # 话题模式：群里，回复话题消息
+                elif mode == "forum" and message.chat.id == forum_group_id:
+                    topic_id = message.reply_to_message.message_thread_id
+                    for uid_str, t_id in msg_map[bot_username]["topics"].items():
+                        if t_id == topic_id:
+                            target_user = int(uid_str)
+                            break
 
             if target_user:
                 if add_to_blacklist(bot_username, target_user):
@@ -246,7 +253,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                 else:
                     await message.reply_text(f"⚠️ 用户 {target_user} 已在黑名单中")
             else:
-                await message.reply_text("⚠️ 请回复要拉黑的用户消息")
+                await message.reply_text("⚠️ 请回复用户消息或输入：/b <TG_ID>")
 
             return
 
@@ -258,18 +265,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
             target_user = None
 
-            # 直连模式
-            if mode == "direct" and message.chat.type == "private" and chat_id == owner_id and message.reply_to_message:
-                direct_map = msg_map[bot_username]["direct"]
-                target_user = direct_map.get(str(message.reply_to_message.message_id))
+            # 方式1：直接输入 TG ID（如：/ub 123456789）
+            parts = cmd.split()
+            if len(parts) == 2 and parts[1].isdigit():
+                target_user = int(parts[1])
+            
+            # 方式2：回复消息
+            elif message.reply_to_message:
+                # 直连模式
+                if mode == "direct" and message.chat.type == "private" and chat_id == owner_id:
+                    direct_map = msg_map[bot_username]["direct"]
+                    target_user = direct_map.get(str(message.reply_to_message.message_id))
 
-            # 话题模式
-            elif mode == "forum" and message.chat.id == forum_group_id and message.reply_to_message:
-                topic_id = message.reply_to_message.message_thread_id
-                for uid_str, t_id in msg_map[bot_username]["topics"].items():
-                    if t_id == topic_id:
-                        target_user = int(uid_str)
-                        break
+                # 话题模式
+                elif mode == "forum" and message.chat.id == forum_group_id:
+                    topic_id = message.reply_to_message.message_thread_id
+                    for uid_str, t_id in msg_map[bot_username]["topics"].items():
+                        if t_id == topic_id:
+                            target_user = int(uid_str)
+                            break
 
             if target_user:
                 if remove_from_blacklist(bot_username, target_user):
@@ -281,7 +295,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                 else:
                     await message.reply_text(f"⚠️ 用户 {target_user} 不在黑名单中")
             else:
-                await message.reply_text("⚠️ 请回复要解除拉黑的用户消息")
+                await message.reply_text("⚠️ 请回复用户消息或输入：/ub <TG_ID>")
 
             return
 
