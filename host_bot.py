@@ -99,9 +99,17 @@ def add_verified_user(bot_username: str, user_id: int):
         verified_users[bot_username].append(user_id)
         save_verified_users()
 
+def remove_verified_user(bot_username: str, user_id: int):
+    """取消用户验证"""
+    if bot_username in verified_users and user_id in verified_users[bot_username]:
+        verified_users[bot_username].remove(user_id)
+        save_verified_users()
+        return True
+    return False
+
 def generate_captcha() -> dict:
     """生成复杂验证码（多种类型）- 完全免费"""
-    captcha_type = random.choice(['math', 'sequence', 'chinese', 'emoji', 'logic', 'time'])
+    captcha_type = random.choice(['math', 'sequence', 'chinese', 'logic', 'time'])
     
     if captcha_type == 'math':
         # 数学运算验证码（升级版：支持多步运算）
@@ -186,34 +194,6 @@ def generate_captcha() -> dict:
             'display': chinese_form
         }
     
-    elif captcha_type == 'emoji':
-        # Emoji 数学验证码（趣味性高）
-        emoji_map = {
-            '🍎': random.randint(1, 9),
-            '🍌': random.randint(1, 9),
-            '🍇': random.randint(1, 9),
-        }
-        emoji_list = list(emoji_map.keys())
-        
-        # 生成简单的emoji算式
-        e1, e2 = random.sample(emoji_list, 2)
-        op = random.choice(['+', '-'])
-        
-        if op == '+':
-            answer = str(emoji_map[e1] + emoji_map[e2])
-            question = f"{e1} = {emoji_map[e1]}\n{e2} = {emoji_map[e2]}\n\n{e1} + {e2} = ?"
-        else:
-            if emoji_map[e1] < emoji_map[e2]:
-                e1, e2 = e2, e1
-            answer = str(emoji_map[e1] - emoji_map[e2])
-            question = f"{e1} = {emoji_map[e1]}\n{e2} = {emoji_map[e2]}\n\n{e1} - {e2} = ?"
-        
-        return {
-            'type': 'emoji',
-            'question': question,
-            'answer': answer
-        }
-    
     elif captcha_type == 'logic':
         # 逻辑推理验证码
         logic_puzzles = [
@@ -283,8 +263,12 @@ def generate_captcha() -> dict:
             hour_12 = random.randint(6, 11)
             hour_24 = hour_12 + 12
         
-        # 中文数字
-        hour_cn = ['十二', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一'][hour_12-1]
+        # 中文数字（1-12对应的中文）
+        hour_cn_map = {
+            1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六',
+            7: '七', 8: '八', 9: '九', 10: '十', 11: '十一', 12: '十二'
+        }
+        hour_cn = hour_cn_map[hour_12]
         
         # 中文表达时间
         time_str = f"{period}{hour_cn}点"
@@ -407,52 +391,56 @@ async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_verifications[verification_key] = captcha_data['answer']
         
         # 根据验证码类型构建消息
-        message_templates = {
-            'math': (
+        captcha_type = captcha_data['type']
+        
+        if captcha_type == 'math':
+            message_text = (
                 f"🔐 数学验证\n\n"
                 f"欢迎使用本机器人！\n"
                 f"为防止滥用，首次使用需要验证。\n\n"
                 f"📝 请计算：<b>{captcha_data['question']}</b>\n\n"
                 f"💡 提示：请输入计算结果（纯数字）"
-            ),
-            'sequence': (
+            )
+        elif captcha_type == 'sequence':
+            message_text = (
                 f"🔐 逻辑验证\n\n"
                 f"欢迎使用本机器人！\n"
                 f"为防止滥用，首次使用需要验证。\n\n"
                 f"📝 {captcha_data['question']}\n\n"
                 f"💡 提示：观察规律，填入下一个数字"
-            ),
-            'chinese': (
+            )
+        elif captcha_type == 'chinese':
+            message_text = (
                 f"🔐 中文数字验证\n\n"
                 f"欢迎使用本机器人！\n"
                 f"为防止滥用，首次使用需要验证。\n\n"
                 f"📝 中文数字：<b>{captcha_data['display']}</b>\n\n"
                 f"💡 {captcha_data['question']}"
-            ),
-            'emoji': (
-                f"🔐 趣味验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 {captcha_data['question']}\n\n"
-                f"💡 提示：仔细观察emoji对应的数字"
-            ),
-            'logic': (
+            )
+        elif captcha_type == 'logic':
+            message_text = (
                 f"🔐 智力验证\n\n"
                 f"欢迎使用本机器人！\n"
                 f"为防止滥用，首次使用需要验证。\n\n"
                 f"📝 {captcha_data['question']}\n\n"
                 f"💡 提示：简单的逻辑题，输入数字答案"
-            ),
-            'time': (
+            )
+        elif captcha_type == 'time':
+            message_text = (
                 f"🔐 时间验证\n\n"
                 f"欢迎使用本机器人！\n"
                 f"为防止滥用，首次使用需要验证。\n\n"
                 f"📝 时间：<b>{captcha_data['display']}</b>\n\n"
                 f"💡 {captcha_data['question']}"
             )
-        }
-        
-        message_text = message_templates.get(captcha_data['type'], message_templates['math'])
+        else:
+            message_text = (
+                f"🔐 验证\n\n"
+                f"欢迎使用本机器人！\n"
+                f"为防止滥用，首次使用需要验证。\n\n"
+                f"📝 {captcha_data['question']}\n\n"
+                f"💡 提示：请输入答案"
+            )
         
         await update.message.reply_text(message_text, parse_mode="HTML")
 
@@ -595,6 +583,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
             return
 
+        # ---------- /unverify 功能（取消用户验证）----------
+        if cmd and (cmd == "/uv" or cmd.startswith("/uv ") or cmd.startswith("/uv@") or 
+                    cmd == "/unverify" or cmd.startswith("/unverify ") or cmd.startswith("/unverify@")):
+            if message.from_user.id != owner_id:
+                return
+
+            target_user = None
+
+            # 方式1：直接输入 TG ID（如：/uv 123456789）
+            parts = cmd.split()
+            if len(parts) == 2 and parts[1].isdigit():
+                target_user = int(parts[1])
+            
+            # 方式2：回复消息
+            elif message.reply_to_message:
+                # 直连模式
+                if mode == "direct" and message.chat.type == "private" and chat_id == owner_id:
+                    direct_map = msg_map[bot_username]["direct"]
+                    target_user = direct_map.get(str(message.reply_to_message.message_id))
+
+                # 话题模式
+                elif mode == "forum" and message.chat.id == forum_group_id:
+                    topic_id = message.reply_to_message.message_thread_id
+                    for uid_str, t_id in msg_map[bot_username]["topics"].items():
+                        if t_id == topic_id:
+                            target_user = int(uid_str)
+                            break
+
+            if target_user:
+                if remove_verified_user(bot_username, target_user):
+                    await message.reply_text(f"🔓 已取消用户 {target_user} 的验证\n下次发送消息时需要重新验证")
+                    
+                    # 通知到管理频道
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    await send_admin_log(f"🔓 Bot @{bot_username} 取消用户 {target_user} 验证 · {now}")
+                else:
+                    await message.reply_text(f"⚠️ 用户 {target_user} 未验证或不存在")
+            else:
+                await message.reply_text("⚠️ 请回复用户消息或输入：/uv <TG_ID>")
+
+            return
+
         # ---------- /id 功能 ----------
         if message.text and message.text.strip().startswith("/id"):
             # 🚫 如果不是主人发的，忽略
@@ -621,7 +651,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                 try:
                     user = await context.bot.get_chat(target_user)
                     is_blocked = is_blacklisted(bot_username, user.id)
-                    status = "🚫 已拉黑" if is_blocked else "✅ 正常"
+                    user_verified = is_verified(bot_username, user.id)
+                    
+                    # 状态显示
+                    status_parts = []
+                    if is_blocked:
+                        status_parts.append("🚫 已拉黑")
+                    else:
+                        status_parts.append("✅ 正常")
+                    
+                    if user_verified:
+                        status_parts.append("🔓 已验证")
+                    else:
+                        status_parts.append("🔒 未验证")
                     
                     text = (
                         f"━━━━━━━━━━━━━━\n"
@@ -630,21 +672,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                         f"🆔 <b>TG_ID:</b> <code>{user.id}</code>\n"
                         f"👤 <b>全   名:</b> {user.first_name} {user.last_name or ''}\n"
                         f"🔗 <b>用户名:</b> @{user.username if user.username else '(无)'}\n"
-                        f"🛡 <b>状   态:</b> {status}\n"
+                        f"🛡 <b>状   态:</b> {' | '.join(status_parts)}\n"
                         f"━━━━━━━━━━━━━━"
                     )
 
-                    # 根据拉黑状态显示不同按钮
+                    # 根据状态显示不同按钮
+                    buttons = []
+                    
+                    # 第一行：拉黑/解除拉黑
                     if is_blocked:
-                        keyboard = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("✅ 解除拉黑", callback_data=f"unblock_{bot_username}_{user.id}")],
-                            [InlineKeyboardButton("📋 复制 UID", switch_inline_query_current_chat=str(user.id))]
-                        ])
+                        buttons.append([InlineKeyboardButton("✅ 解除拉黑", callback_data=f"unblock_{bot_username}_{user.id}")])
                     else:
-                        keyboard = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🚫 拉黑用户", callback_data=f"block_{bot_username}_{user.id}")],
-                            [InlineKeyboardButton("📋 复制 UID", switch_inline_query_current_chat=str(user.id))]
-                        ])
+                        buttons.append([InlineKeyboardButton("🚫 拉黑用户", callback_data=f"block_{bot_username}_{user.id}")])
+                    
+                    # 第二行：取消验证（仅已验证用户显示）
+                    if user_verified:
+                        buttons.append([InlineKeyboardButton("🔓 取消验证", callback_data=f"unverify_{bot_username}_{user.id}")])
+                    
+                    # 第三行：复制UID
+                    buttons.append([InlineKeyboardButton("📋 复制 UID", switch_inline_query_current_chat=str(user.id))])
+                    
+                    keyboard = InlineKeyboardMarkup(buttons)
 
                     await message.reply_text(
                         text,
@@ -715,16 +763,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                     logger.info(f"[验证码] 类型: {captcha_data['type']}, 答案: {captcha_data['answer']}")
                     
                     # 根据验证码类型构建消息
-                    retry_templates = {
-                        'math': f"🔐 数学验证\n\n你还未通过验证。\n\n📝 请计算：<b>{captcha_data['question']}</b>\n\n💡 输入计算结果或 /start 换题",
-                        'sequence': f"🔐 逻辑验证\n\n你还未通过验证。\n\n📝 {captcha_data['question']}\n\n💡 观察规律或 /start 换题",
-                        'chinese': f"🔐 中文数字验证\n\n你还未通过验证。\n\n📝 中文数字：<b>{captcha_data['display']}</b>\n\n💡 {captcha_data['question']}或 /start 换题",
-                        'emoji': f"🔐 趣味验证\n\n你还未通过验证。\n\n📝 {captcha_data['question']}\n\n💡 仔细观察或 /start 换题",
-                        'logic': f"🔐 智力验证\n\n你还未通过验证。\n\n📝 {captcha_data['question']}\n\n💡 简单逻辑题或 /start 换题",
-                        'time': f"🔐 时间验证\n\n你还未通过验证。\n\n📝 时间：<b>{captcha_data['display']}</b>\n\n💡 {captcha_data['question']}或 /start 换题"
-                    }
+                    retry_captcha_type = captcha_data['type']
                     
-                    message_text = retry_templates.get(captcha_data['type'], retry_templates['math'])
+                    if retry_captcha_type == 'math':
+                        message_text = f"🔐 数学验证\n\n你还未通过验证。\n\n📝 请计算：<b>{captcha_data['question']}</b>\n\n💡 输入计算结果或 /start 换题"
+                    elif retry_captcha_type == 'sequence':
+                        message_text = f"🔐 逻辑验证\n\n你还未通过验证。\n\n📝 {captcha_data['question']}\n\n💡 观察规律或 /start 换题"
+                    elif retry_captcha_type == 'chinese':
+                        message_text = f"🔐 中文数字验证\n\n你还未通过验证。\n\n📝 中文数字：<b>{captcha_data['display']}</b>\n\n💡 {captcha_data['question']}或 /start 换题"
+                    elif retry_captcha_type == 'logic':
+                        message_text = f"🔐 智力验证\n\n你还未通过验证。\n\n📝 {captcha_data['question']}\n\n💡 简单逻辑题或 /start 换题"
+                    elif retry_captcha_type == 'time':
+                        message_text = f"🔐 时间验证\n\n你还未通过验证。\n\n📝 时间：<b>{captcha_data['display']}</b>\n\n💡 {captcha_data['question']}或 /start 换题"
+                    else:
+                        message_text = f"🔐 验证\n\n你还未通过验证。\n\n📝 {captcha_data['question']}\n\n💡 请输入答案或 /start 换题"
                     
                     await message.reply_text(message_text, parse_mode="HTML")
                     return
@@ -972,10 +1024,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     await query.answer()
 
-    # 新增：处理拉黑/解除拉黑按钮
-    if data.startswith("block_") or data.startswith("unblock_"):
+    # 新增：处理拉黑/解除拉黑/取消验证按钮
+    if data.startswith("block_") or data.startswith("unblock_") or data.startswith("unverify_"):
         parts = data.split("_")
-        action = parts[0]  # "block" or "unblock"
+        action = parts[0]  # "block" or "unblock" or "unverify"
         bot_username = parts[1]
         user_id = int(parts[2])
 
@@ -986,13 +1038,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await send_admin_log(f"🚫 Bot @{bot_username} 拉黑用户 {user_id} · {now}")
             else:
                 await query.message.edit_text(f"⚠️ 用户 {user_id} 已在黑名单中")
-        else:  # unblock
+        elif action == "unblock":
             if remove_from_blacklist(bot_username, user_id):
                 await query.message.edit_text(f"✅ 已将用户 {user_id} 从黑名单移除")
                 now = datetime.now().strftime("%Y-%m-%d %H:%M")
                 await send_admin_log(f"✅ Bot @{bot_username} 解除拉黑用户 {user_id} · {now}")
             else:
                 await query.message.edit_text(f"⚠️ 用户 {user_id} 不在黑名单中")
+        else:  # unverify
+            if remove_verified_user(bot_username, user_id):
+                await query.message.edit_text(f"🔓 已取消用户 {user_id} 的验证\n下次发送消息时需要重新验证")
+                now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                await send_admin_log(f"🔓 Bot @{bot_username} 取消用户 {user_id} 验证 · {now}")
+            else:
+                await query.message.edit_text(f"⚠️ 用户 {user_id} 未验证或不存在")
         return
 
     if data == "addbot":
