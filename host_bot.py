@@ -183,9 +183,11 @@ def generate_captcha() -> dict:
         # 中文数字验证码（防机器人效果极佳）
         chinese_nums = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
         num = random.randint(10, 99)
-        chinese_form = chinese_nums[num // 10] + '十' + (chinese_nums[num % 10] if num % 10 != 0 else '')
+        # 修复：先判断是否为10-19，避免重复赋值
         if num // 10 == 1:
             chinese_form = '十' + (chinese_nums[num % 10] if num % 10 != 0 else '')
+        else:
+            chinese_form = chinese_nums[num // 10] + '十' + (chinese_nums[num % 10] if num % 10 != 0 else '')
         
         return {
             'type': 'chinese',
@@ -255,7 +257,6 @@ def generate_captcha() -> dict:
             hour_24 = hour_12
         elif period == '下午':
             # 下午：12点-5点 (12:00-17:59)
-            hour_12 = random.randint(12, 5) if random.random() < 0.5 else random.choice([12, 1, 2, 3, 4, 5])
             hour_12 = random.choice([12, 1, 2, 3, 4, 5])
             hour_24 = hour_12 if hour_12 == 12 else hour_12 + 12
         else:  # 晚上
@@ -333,7 +334,7 @@ async def send_admin_log(text: str):
     try:
         app = running_apps.get("__manager__")
         if app:
-            await app.bot.send_message(chat_id=ADMIN_CHANNEL, text=text)
+            await app.bot.send_message(chat_id=ADMIN_CHANNEL, text=text, parse_mode="HTML")
     except Exception as e:
         logger.error(f"宿主通知失败: {e}")
 
@@ -531,9 +532,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                 if add_to_blacklist(bot_username, target_user):
                     await message.reply_text(f"🚫 已将用户 {target_user} 加入黑名单")
                     
-                    # 通知到管理频道
+                    # 通知到管理频道 - 获取用户信息
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    await send_admin_log(f"🚫 Bot @{bot_username} 拉黑用户 {target_user} · {now}")
+                    try:
+                        user = await context.bot.get_chat(target_user)
+                        user_username = user.username
+                        user_name = user.full_name or "匿名用户"
+                        # 优先使用 @用户名
+                        if user_username:
+                            user_display = f"@{user_username}"
+                        else:
+                            user_display = f"<a href='tg://user?id={target_user}'>{user_name}</a>"
+                        log_text = f"🚫 Bot @{bot_username} 拉黑用户 {user_display} (ID: <code>{target_user}</code>) · {now}"
+                    except:
+                        # 如果获取失败，仅显示ID
+                        log_text = f"🚫 Bot @{bot_username} 拉黑用户 ID: <code>{target_user}</code> · {now}"
+                    await send_admin_log(log_text)
                 else:
                     await message.reply_text(f"⚠️ 用户 {target_user} 已在黑名单中")
             else:
@@ -573,9 +587,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                 if remove_from_blacklist(bot_username, target_user):
                     await message.reply_text(f"✅ 已将用户 {target_user} 从黑名单移除")
                     
-                    # 通知到管理频道
+                    # 通知到管理频道 - 获取用户信息
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    await send_admin_log(f"✅ Bot @{bot_username} 解除拉黑用户 {target_user} · {now}")
+                    try:
+                        user = await context.bot.get_chat(target_user)
+                        user_username = user.username
+                        user_name = user.full_name or "匿名用户"
+                        # 优先使用 @用户名
+                        if user_username:
+                            user_display = f"@{user_username}"
+                        else:
+                            user_display = f"<a href='tg://user?id={target_user}'>{user_name}</a>"
+                        log_text = f"✅ Bot @{bot_username} 解除拉黑用户 {user_display} (ID: <code>{target_user}</code>) · {now}"
+                    except:
+                        # 如果获取失败，仅显示ID
+                        log_text = f"✅ Bot @{bot_username} 解除拉黑用户 ID: <code>{target_user}</code> · {now}"
+                    await send_admin_log(log_text)
                 else:
                     await message.reply_text(f"⚠️ 用户 {target_user} 不在黑名单中")
             else:
@@ -615,9 +642,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                 if remove_verified_user(bot_username, target_user):
                     await message.reply_text(f"🔓 已取消用户 {target_user} 的验证\n下次发送消息时需要重新验证")
                     
-                    # 通知到管理频道
+                    # 通知到管理频道 - 获取用户信息
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    await send_admin_log(f"🔓 Bot @{bot_username} 取消用户 {target_user} 验证 · {now}")
+                    try:
+                        user = await context.bot.get_chat(target_user)
+                        user_username = user.username
+                        user_name = user.full_name or "匿名用户"
+                        # 优先使用 @用户名
+                        if user_username:
+                            user_display = f"@{user_username}"
+                        else:
+                            user_display = f"<a href='tg://user?id={target_user}'>{user_name}</a>"
+                        log_text = f"🔓 Bot @{bot_username} 取消用户 {user_display} (ID: <code>{target_user}</code>) 验证 · {now}"
+                    except:
+                        # 如果获取失败，仅显示ID
+                        log_text = f"🔓 Bot @{bot_username} 取消用户 ID: <code>{target_user}</code> 验证 · {now}"
+                    await send_admin_log(log_text)
                 else:
                     await message.reply_text(f"⚠️ 用户 {target_user} 未验证或不存在")
             else:
@@ -741,10 +781,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                             "请直接输入消息，主人收到就会回复你"
                         )
                         
-                        # 通知管理员
-                        user_name = message.from_user.full_name or f"@{message.from_user.username}" if message.from_user.username else "匿名用户"
+                        # 通知Bot的主人（owner）
+                        user_name = message.from_user.full_name or "匿名用户"
+                        user_username = message.from_user.username
                         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        await send_admin_log(f"✅ 新用户验证成功\n👤 {user_name} (ID: {user_id})\n🤖 Bot: @{bot_username}\n⏰ {now}")
+                        
+                        # 构建用户显示：统一风格（多行分开显示）
+                        notification_text = f"✅ 新用户验证成功\n\n"
+                        notification_text += f"👤 昵称: {user_name}\n"
+                        if user_username:
+                            notification_text += f"📱 用户名: @{user_username}\n"
+                        notification_text += (
+                            f"🆔 ID: <code>{user_id}</code>\n"
+                            f"🤖 Bot: @{bot_username}\n"
+                            f"⏰ {now}"
+                        )
+                        
+                        # 仅发送给Bot的主人
+                        try:
+                            await context.bot.send_message(
+                                chat_id=owner_id,
+                                text=notification_text,
+                                parse_mode="HTML"
+                            )
+                        except Exception as e:
+                            logger.error(f"通知Bot主人失败: {e}")
                         
                         return
                     else:
@@ -950,7 +1011,9 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"✅ 已为 @{bot_username} 设置话题群ID：{gid}")
                 # 宿主通知
                 now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                await send_admin_log(f"🛠 用户({owner_id}) 为 @{bot_username} 设置话题群ID为 {gid} · {now}")
+                user_username = update.message.from_user.username
+                user_display = f"@{user_username}" if user_username else f"用户ID: {owner_id}"
+                await send_admin_log(f"🛠 {user_display} (ID: <code>{owner_id}</code>) 为 @{bot_username} 设置话题群ID为 {gid} · {now}")
                 break
         context.user_data.pop("waiting_forum_for", None)
         return
@@ -1008,11 +1071,13 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💡 话题模式 必须 设置话题群ID。"
     )
 
-    # 🔔 添加通知
+    # 🔔 添加通知（发送到管理频道）
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # 优先使用 @用户名
+    user_display = f"@{owner_username}" if owner_username else f"用户ID: {owner_id}"
     log_text = (
-        f"🛒 用户 @{owner_username or '未知'}\n"
-        f"🆔 ({owner_id})\n"
+        f"🛒 {user_display}\n"
+        f"🆔 <code>{owner_id}</code>\n"
         f"🤖 Bot: @{bot_username}\n"
         f"⏰ {now}"
     )
@@ -1035,21 +1100,63 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if add_to_blacklist(bot_username, user_id):
                 await query.message.edit_text(f"🚫 已将用户 {user_id} 加入黑名单")
                 now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                await send_admin_log(f"🚫 Bot @{bot_username} 拉黑用户 {user_id} · {now}")
+                # 获取用户信息
+                try:
+                    user = await context.bot.get_chat(user_id)
+                    user_username = user.username
+                    user_name = user.full_name or "匿名用户"
+                    # 优先使用 @用户名
+                    if user_username:
+                        user_display = f"@{user_username}"
+                    else:
+                        user_display = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
+                    log_text = f"🚫 Bot @{bot_username} 拉黑用户 {user_display} (ID: <code>{user_id}</code>) · {now}"
+                except:
+                    # 如果获取失败，仅显示ID
+                    log_text = f"🚫 Bot @{bot_username} 拉黑用户 ID: <code>{user_id}</code> · {now}"
+                await send_admin_log(log_text)
             else:
                 await query.message.edit_text(f"⚠️ 用户 {user_id} 已在黑名单中")
         elif action == "unblock":
             if remove_from_blacklist(bot_username, user_id):
                 await query.message.edit_text(f"✅ 已将用户 {user_id} 从黑名单移除")
                 now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                await send_admin_log(f"✅ Bot @{bot_username} 解除拉黑用户 {user_id} · {now}")
+                # 获取用户信息
+                try:
+                    user = await context.bot.get_chat(user_id)
+                    user_username = user.username
+                    user_name = user.full_name or "匿名用户"
+                    # 优先使用 @用户名
+                    if user_username:
+                        user_display = f"@{user_username}"
+                    else:
+                        user_display = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
+                    log_text = f"✅ Bot @{bot_username} 解除拉黑用户 {user_display} (ID: <code>{user_id}</code>) · {now}"
+                except:
+                    # 如果获取失败，仅显示ID
+                    log_text = f"✅ Bot @{bot_username} 解除拉黑用户 ID: <code>{user_id}</code> · {now}"
+                await send_admin_log(log_text)
             else:
                 await query.message.edit_text(f"⚠️ 用户 {user_id} 不在黑名单中")
         else:  # unverify
             if remove_verified_user(bot_username, user_id):
                 await query.message.edit_text(f"🔓 已取消用户 {user_id} 的验证\n下次发送消息时需要重新验证")
                 now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                await send_admin_log(f"🔓 Bot @{bot_username} 取消用户 {user_id} 验证 · {now}")
+                # 获取用户信息
+                try:
+                    user = await context.bot.get_chat(user_id)
+                    user_username = user.username
+                    user_name = user.full_name or "匿名用户"
+                    # 优先使用 @用户名
+                    if user_username:
+                        user_display = f"@{user_username}"
+                    else:
+                        user_display = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
+                    log_text = f"🔓 Bot @{bot_username} 取消用户 {user_display} (ID: <code>{user_id}</code>) 验证 · {now}"
+                except:
+                    # 如果获取失败，仅显示ID
+                    log_text = f"🔓 Bot @{bot_username} 取消用户 ID: <code>{user_id}</code> 验证 · {now}"
+                await send_admin_log(log_text)
             else:
                 await query.message.edit_text(f"⚠️ 用户 {user_id} 未验证或不存在")
         return
@@ -1137,7 +1244,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 显示中文标签 & 推送到 ADMIN_CHANNEL
         mode_cn_full = "私聊模式" if mode == "direct" else "话题模式"
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        await send_admin_log(f"📡 用户({owner_id}) 将 @{bot_username} 切换为 {mode_cn_full} · {now}")
+        user_username = query.from_user.username
+        user_display = f"@{user_username}" if user_username else f"用户ID: {owner_id}"
+        await send_admin_log(f"📡 {user_display} (ID: <code>{owner_id}</code>) 将 @{bot_username} 切换为 {mode_cn_full} · {now}")
 
         await query.message.reply_text(f"✅ 已将 @{bot_username} 切换为 {mode_cn_full.split('模式')[0]} 模式。")
 
@@ -1169,11 +1278,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_bots()
             await query.message.edit_text(f"✅ 已断开Bot：@{bot_username}")
 
-            # 🔔 删除通知
+            # 🔔 删除通知（发送到管理频道）
             now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            # 优先使用 @用户名
+            user_display = f"@{owner_username}" if owner_username else f"用户ID: {owner_id}"
             log_text = (
-                f"🗑 用户 @{owner_username or '未知'}\n"
-                f"🆔 ({owner_id})\n"
+                f"🗑 {user_display}\n"
+                f"🆔 <code>{owner_id}</code>\n"
                 f"🤖 Bot: @{bot_username}\n"
                 f"⏰ {now}"
             )
