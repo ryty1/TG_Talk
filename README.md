@@ -17,6 +17,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/
 
 - 私聊模式/话题模式 切换，/id 获取对应用户的基础资料
 
+- `消息双向可再编辑`
+
 - 宿主机`不储存`用户聊天信息记录。
 
 #### 2. **拉黑用户** - `/b` (或 `/block`)
