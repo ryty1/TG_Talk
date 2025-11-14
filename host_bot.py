@@ -334,6 +334,15 @@ async def reply_and_auto_delete(message, text, delay=5, **kwargs):
     except Exception:
         pass
 
+async def send_and_auto_delete(context, chat_id, text, delay=5, **kwargs):
+    """发送消息并自动删除(不使用reply)"""
+    try:
+        sent = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        await asyncio.sleep(delay)
+        await sent.delete()
+    except Exception:
+        pass
+
 async def send_admin_log(text: str):
     if not ADMIN_CHANNEL:
         return
@@ -885,12 +894,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                                     text=f"{user_header}\n\n{message.text} [✏️已编辑]"
                                 )
                                 logger.info(f"用户 {chat_id} 编辑消息成功")
+                                await reply_and_auto_delete(message, "✅ 编辑同步成功", delay=3)
                             else:
                                 # 如果不是文本消息，无法直接编辑，发送新消息提示
                                 await context.bot.send_message(
                                     chat_id=owner_id,
                                     text=f"✏️ 用户 {message.from_user.full_name or '未知'} (ID: {chat_id}) 编辑了消息\n(非文本消息无法同步编辑)"
                                 )
+                                await reply_and_auto_delete(message, "⚠️ 非文本消息无法同步编辑", delay=3)
                         except Exception as e:
                             logger.error(f"编辑消息失败: {e}")
                             # 如果编辑失败，发送提示
@@ -898,6 +909,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                                 chat_id=owner_id,
                                 text=f"✏️ 用户 {message.from_user.full_name or '未知'} (ID: {chat_id}) 编辑了消息，但无法同步编辑"
                             )
+                            await reply_and_auto_delete(message, f"⚠️ 编辑同步失败", delay=3)
                         return
                 else:
                     # 新消息 - 发送文本消息而不是转发(这样可以编辑)
@@ -953,6 +965,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                                         text=message.text
                                     )
                                     logger.info(f"主人编辑回复成功")
+                                    await reply_and_auto_delete(message, "✅ 编辑同步成功", delay=2)
                                 else:
                                     await reply_and_auto_delete(message, "⚠️ 非文本消息无法编辑", delay=3)
                             except Exception as e:
@@ -1029,6 +1042,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                                         text=f"{message.text} [✏️已编辑]"
                                     )
                                     logger.info(f"[话题模式] 用户 {chat_id} 编辑消息成功")
+                                    # 话题模式：直接发送消息给用户，不使用reply
+                                    await send_and_auto_delete(context, chat_id, "✅ 编辑同步成功", delay=3)
                                 else:
                                     # 非文本消息无法编辑
                                     await context.bot.send_message(
@@ -1036,6 +1051,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                                         message_thread_id=topic_id,
                                         text=f"✏️ 用户编辑了消息 (非文本消息无法同步编辑)"
                                     )
+                                    await send_and_auto_delete(context, chat_id, "⚠️ 非文本消息无法同步编辑", delay=3)
                             except Exception as e:
                                 logger.error(f"[话题模式] 编辑消息失败: {e}")
                                 # 编辑失败，发送提示
@@ -1044,6 +1060,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                                     message_thread_id=topic_id,
                                     text="✏️ 用户编辑了消息，但无法同步编辑"
                                 )
+                                await send_and_auto_delete(context, chat_id, "⚠️ 编辑同步失败", delay=3)
                         return
                     else:
                         # 新消息
@@ -1130,6 +1147,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                                             text=message.text
                                         )
                                         logger.info(f"[话题模式] 主人编辑回复成功")
+                                        # 话题模式下主人在群里编辑，给一个简单的反馈(不使用reply_and_auto_delete，因为可能没有reply_to_message)
+                                        try:
+                                            sent = await message.reply_text("✅ 编辑同步成功")
+                                            await asyncio.sleep(2)
+                                            await sent.delete()
+                                        except:
+                                            pass
                                     else:
                                         logger.warning(f"[话题模式] 非文本消息无法编辑")
                                 except Exception as e:
