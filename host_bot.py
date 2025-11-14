@@ -319,6 +319,12 @@ def ensure_bot_map(bot_username: str):
     msg_map[bot_username].setdefault("direct", {})
     # 话题：用户ID(str) -> topic_id(int)
     msg_map[bot_username].setdefault("topics", {})
+    # 用户消息ID -> 转发后的消息ID (用于编辑消息)
+    msg_map[bot_username].setdefault("user_to_forward", {})
+    # 转发消息ID -> 用户消息ID (用于反向查找)
+    msg_map[bot_username].setdefault("forward_to_user", {})
+    # 主人消息ID -> 发送给用户的消息ID (用于编辑主人发送的消息)
+    msg_map[bot_username].setdefault("owner_to_user", {})
 
 async def reply_and_auto_delete(message, text, delay=5, **kwargs):
     try:
@@ -462,7 +468,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
       查看黑名单
     """
     try:
-        message = update.message
+        # 支持编辑消息
+        message = update.edited_message or update.message
+        if not message:
+            return
+        
+        is_edit = update.edited_message is not None
         chat_id = message.chat.id
 
         # 找到该子机器人的配置
@@ -854,29 +865,114 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
         if mode == "direct":
             # 普通用户发私聊 -> 转给主人
             if message.chat.type == "private" and chat_id != owner_id:
-                fwd_msg = await context.bot.forward_message(
-                    chat_id=owner_id,
-                    from_chat_id=chat_id,
-                    message_id=message.message_id
-                )
-                msg_map[bot_username]["direct"][str(fwd_msg.message_id)] = chat_id
-                save_map()
-                await reply_and_auto_delete(message, "✅ 已成功发送", delay=3)
+                user_msg_key = f"{chat_id}_{message.message_id}"
+                
+                if is_edit:
+                    # 如果是编辑消息，尝试编辑之前发送的消息
+                    forward_msg_id = msg_map[bot_username]["user_to_forward"].get(user_msg_key)
+                    if forward_msg_id:
+                        try:
+                            # 编辑消息 (只能编辑文本)
+                            if message.text:
+                                # 获取用户名
+                                username = f"@{message.from_user.username}" if message.from_user.username else ""
+                                display_name = message.from_user.full_name or '未知'
+                                user_header = f"👤 {display_name} ({username})" if username else f"👤 {display_name}"
+                                
+                                await context.bot.edit_message_text(
+                                    chat_id=owner_id,
+                                    message_id=forward_msg_id,
+                                    text=f"{user_header}\n\n{message.text} [✏️已编辑]"
+                                )
+                                logger.info(f"用户 {chat_id} 编辑消息成功")
+                            else:
+                                # 如果不是文本消息，无法直接编辑，发送新消息提示
+                                await context.bot.send_message(
+                                    chat_id=owner_id,
+                                    text=f"✏️ 用户 {message.from_user.full_name or '未知'} (ID: {chat_id}) 编辑了消息\n(非文本消息无法同步编辑)"
+                                )
+                        except Exception as e:
+                            logger.error(f"编辑消息失败: {e}")
+                            # 如果编辑失败，发送提示
+                            await context.bot.send_message(
+                                chat_id=owner_id,
+                                text=f"✏️ 用户 {message.from_user.full_name or '未知'} (ID: {chat_id}) 编辑了消息，但无法同步编辑"
+                            )
+                        return
+                else:
+                    # 新消息 - 发送文本消息而不是转发(这样可以编辑)
+                    # 获取用户名
+                    username = f"@{message.from_user.username}" if message.from_user.username else ""
+                    display_name = message.from_user.full_name or '未知'
+                    user_header = f"👤 {display_name} ({username})" if username else f"👤 {display_name}"
+                    
+                    if message.text:
+                        # 文本消息：发送可编辑的消息
+                        sent_msg = await context.bot.send_message(
+                            chat_id=owner_id,
+                            text=f"{user_header}\n\n{message.text}"
+                        )
+                        msg_map[bot_username]["direct"][str(sent_msg.message_id)] = chat_id
+                        msg_map[bot_username]["user_to_forward"][user_msg_key] = sent_msg.message_id
+                        msg_map[bot_username]["forward_to_user"][str(sent_msg.message_id)] = user_msg_key
+                        save_map()
+                    else:
+                        # 非文本消息：先发送用户信息，再转发原消息
+                        await context.bot.send_message(
+                            chat_id=owner_id,
+                            text=user_header
+                        )
+                        fwd_msg = await context.bot.forward_message(
+                            chat_id=owner_id,
+                            from_chat_id=chat_id,
+                            message_id=message.message_id
+                        )
+                        msg_map[bot_username]["direct"][str(fwd_msg.message_id)] = chat_id
+                        save_map()
+                    
+                    await reply_and_auto_delete(message, "✅ 已成功发送", delay=3)
                 return
 
             # 主人在私聊里回复 -> 回用户
             if message.chat.type == "private" and chat_id == owner_id and message.reply_to_message:
                 direct_map = msg_map[bot_username]["direct"]
                 target_user = direct_map.get(str(message.reply_to_message.message_id))
+                
                 if target_user:
-                    await context.bot.copy_message(
-                        chat_id=target_user,
-                        from_chat_id=owner_id,
-                        message_id=message.message_id
-                    )
-                    await reply_and_auto_delete(message, "✅ 回复已送达", delay=2)
+                    owner_msg_key = f"{owner_id}_{message.message_id}"
+                    
+                    if is_edit:
+                        # 主人编辑了回复，尝试编辑发送给用户的消息
+                        user_msg_id = msg_map[bot_username]["owner_to_user"].get(owner_msg_key)
+                        if user_msg_id:
+                            try:
+                                if message.text:
+                                    await context.bot.edit_message_text(
+                                        chat_id=target_user,
+                                        message_id=user_msg_id,
+                                        text=message.text
+                                    )
+                                    logger.info(f"主人编辑回复成功")
+                                else:
+                                    await reply_and_auto_delete(message, "⚠️ 非文本消息无法编辑", delay=3)
+                            except Exception as e:
+                                logger.error(f"编辑回复失败: {e}")
+                                await reply_and_auto_delete(message, f"⚠️ 编辑失败: {e}", delay=5)
+                        return
+                    else:
+                        # 新回复
+                        sent_msg = await context.bot.copy_message(
+                            chat_id=target_user,
+                            from_chat_id=owner_id,
+                            message_id=message.message_id
+                        )
+                        # 保存映射关系
+                        msg_map[bot_username]["owner_to_user"][owner_msg_key] = sent_msg.message_id
+                        save_map()
+                        await reply_and_auto_delete(message, "✅ 回复已送达", delay=2)
                 else:
-                    await reply_and_auto_delete(message, "⚠️ 找不到对应的用户映射。", delay=5)
+                    if not is_edit:
+                        await reply_and_auto_delete(message, "⚠️ 找不到对应的用户映射。", delay=5)
                 return
 
         # ---------- 话题模式 ----------
@@ -896,6 +992,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                 logger.info(f"[话题模式] 收到用户 {chat_id} 的私聊消息，准备转发到群 {forum_group_id}")
                 uid_key = str(chat_id)
                 topic_id = topics.get(uid_key)
+                user_msg_key = f"{chat_id}_{message.message_id}"
 
                 # 若无映射，先创建话题
                 if not topic_id:
@@ -919,15 +1016,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
                 # 转发到话题
                 try:
-                    logger.info(f"[话题模式] 转发消息到话题 {topic_id}")
-                    await context.bot.forward_message(
-                        chat_id=forum_group_id,
-                        from_chat_id=chat_id,
-                        message_id=message.message_id,
-                        message_thread_id=topic_id
-                    )
-                    logger.info(f"[话题模式] 转发成功")
-                    await reply_and_auto_delete(message, "✅ 已转交客服处理", delay=2)
+                    if is_edit:
+                        # 如果是编辑消息，尝试编辑之前发送的消息
+                        forward_msg_id = msg_map[bot_username]["user_to_forward"].get(user_msg_key)
+                        if forward_msg_id:
+                            try:
+                                if message.text:
+                                    # 话题模式：不显示用户信息(话题名称已经是用户名)
+                                    await context.bot.edit_message_text(
+                                        chat_id=forum_group_id,
+                                        message_id=forward_msg_id,
+                                        text=f"{message.text} [✏️已编辑]"
+                                    )
+                                    logger.info(f"[话题模式] 用户 {chat_id} 编辑消息成功")
+                                else:
+                                    # 非文本消息无法编辑
+                                    await context.bot.send_message(
+                                        chat_id=forum_group_id,
+                                        message_thread_id=topic_id,
+                                        text=f"✏️ 用户编辑了消息 (非文本消息无法同步编辑)"
+                                    )
+                            except Exception as e:
+                                logger.error(f"[话题模式] 编辑消息失败: {e}")
+                                # 编辑失败，发送提示
+                                await context.bot.send_message(
+                                    chat_id=forum_group_id,
+                                    message_thread_id=topic_id,
+                                    text="✏️ 用户编辑了消息，但无法同步编辑"
+                                )
+                        return
+                    else:
+                        # 新消息
+                        logger.info(f"[话题模式] 转发消息到话题 {topic_id}")
+                        
+                        if message.text:
+                            # 文本消息：发送可编辑的消息(话题模式不显示用户信息)
+                            sent_msg = await context.bot.send_message(
+                                chat_id=forum_group_id,
+                                message_thread_id=topic_id,
+                                text=message.text
+                            )
+                            # 保存映射关系
+                            msg_map[bot_username]["user_to_forward"][user_msg_key] = sent_msg.message_id
+                            msg_map[bot_username]["forward_to_user"][str(sent_msg.message_id)] = user_msg_key
+                            save_map()
+                        else:
+                            # 非文本消息：直接转发(话题模式)
+                            await context.bot.forward_message(
+                                chat_id=forum_group_id,
+                                from_chat_id=chat_id,
+                                message_id=message.message_id,
+                                message_thread_id=topic_id
+                            )
+                        
+                        logger.info(f"[话题模式] 转发成功")
+                        await reply_and_auto_delete(message, "✅ 已转交客服处理", delay=2)
 
                 except BadRequest as e:
                     low = str(e).lower()
@@ -973,13 +1116,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                         break
                 if target_uid:
                     try:
-                        logger.info(f"[话题模式] 找到用户 {target_uid}，准备发送")
-                        await context.bot.copy_message(
-                            chat_id=target_uid,
-                            from_chat_id=forum_group_id,
-                            message_id=message.message_id
-                        )
-                        logger.info(f"[话题模式] 回复发送成功")
+                        owner_msg_key = f"{forum_group_id}_{message.message_id}"
+                        
+                        if is_edit:
+                            # 主人编辑了消息，尝试编辑发送给用户的消息
+                            user_msg_id = msg_map[bot_username]["owner_to_user"].get(owner_msg_key)
+                            if user_msg_id:
+                                try:
+                                    if message.text:
+                                        await context.bot.edit_message_text(
+                                            chat_id=target_uid,
+                                            message_id=user_msg_id,
+                                            text=message.text
+                                        )
+                                        logger.info(f"[话题模式] 主人编辑回复成功")
+                                    else:
+                                        logger.warning(f"[话题模式] 非文本消息无法编辑")
+                                except Exception as e:
+                                    logger.error(f"[话题模式] 编辑回复失败: {e}")
+                        else:
+                            # 新消息
+                            logger.info(f"[话题模式] 找到用户 {target_uid}，准备发送")
+                            sent_msg = await context.bot.copy_message(
+                                chat_id=target_uid,
+                                from_chat_id=forum_group_id,
+                                message_id=message.message_id
+                            )
+                            # 保存映射关系
+                            msg_map[bot_username]["owner_to_user"][owner_msg_key] = sent_msg.message_id
+                            save_map()
+                            logger.info(f"[话题模式] 回复发送成功")
                     except Exception as e:
                         logger.error(f"群->用户 复制失败: {e}")
                 else:
@@ -1057,7 +1223,10 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 启动子 Bot
     new_app = Application.builder().token(token).build()
     new_app.add_handler(CommandHandler("start", subbot_start))
+    # 处理普通消息
     new_app.add_handler(MessageHandler(filters.ALL, partial(handle_message, owner_id=int(owner_id), bot_username=bot_username)))
+    # 处理编辑消息
+    new_app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, partial(handle_message, owner_id=int(owner_id), bot_username=bot_username)))
 
     running_apps[bot_username] = new_app
     await new_app.initialize()
@@ -1311,7 +1480,10 @@ async def run_all_bots():
             try:
                 app = Application.builder().token(token).build()
                 app.add_handler(CommandHandler("start", subbot_start))
+                # 处理普通消息
                 app.add_handler(MessageHandler(filters.ALL, partial(handle_message, owner_id=int(owner_id), bot_username=bot_username)))
+                # 处理编辑消息 - 使用 filters.UpdateType.EDITED_MESSAGE
+                app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, partial(handle_message, owner_id=int(owner_id), bot_username=bot_username)))
                 running_apps[bot_username] = app
                 await app.initialize(); await app.start(); await app.updater.start_polling()
                 logger.info(f"启动子Bot: @{bot_username}")
