@@ -103,7 +103,31 @@ function setup_github_backup() {
     return 1
   fi
   
-  read -p "🔑 请输入 GitHub Personal Access Token (需要 repo 权限): " GH_TOKEN
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "📘 如何获取 GitHub Personal Access Token"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "1️⃣  访问 GitHub Settings"
+  echo "   https://github.com/settings/tokens"
+  echo ""
+  echo "2️⃣  点击 'Generate new token' → 'Generate new token (classic)'"
+  echo ""
+  echo "3️⃣  填写 Token 信息："
+  echo "   • Note: 填写备注（如：TG Bot Backup）"
+  echo "   • Expiration: 选择过期时间（建议 No expiration）"
+  echo ""
+  echo "4️⃣  勾选权限（Scopes）："
+  echo "   ✅ repo (完整仓库访问权限)"
+  echo ""
+  echo "5️⃣  点击页面底部 'Generate token'"
+  echo ""
+  echo "6️⃣  复制生成的 Token（只显示一次，请妥善保存）"
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  
+  read -p "🔑 请输入 GitHub Personal Access Token: " GH_TOKEN
   if [ -z "$GH_TOKEN" ]; then
     echo "❌ Token 不能为空"
     return 1
@@ -192,7 +216,7 @@ else
     if [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
       curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
         -d chat_id="$ADMIN_CHANNEL" \
-        -d text="✅ 自动备份成功%0A%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A📦 状态: 已推送到 GitHub%0A⏰ 时间: $DATE" \
+        -d text="✅ 自动备份成功%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A📦 状态: 已推送到 GitHub" \
         >/dev/null 2>&1
     fi
   else
@@ -202,7 +226,7 @@ else
     if [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
       curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
         -d chat_id="$ADMIN_CHANNEL" \
-        -d text="❌ 自动备份失败%0A%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A⚠️ 原因: GitHub 推送失败%0A⏰ 时间: $DATE" \
+        -d text="❌ 自动备份失败%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A⚠️ 原因: GitHub 推送失败" \
         >/dev/null 2>&1
     fi
     exit 1
@@ -328,7 +352,7 @@ echo "============================"
 echo "   请选择要恢复的内容"
 echo "============================"
 echo ""
-echo "1) 仅恢复数据文件 (bot_data.db)"
+echo "1) 仅恢复数据文件 (bots.json, msg_map.json, blacklist.json, verified_users.json)"
 echo "2) 恢复数据库 + 配置文件 (.env)"
 echo "3) 恢复数据库 + 脚本文件 (host_bot.py, database.py)"
 echo "4) 恢复全部 (数据 + 配置 + 脚本)"
@@ -387,7 +411,7 @@ echo ""
 echo "将要恢复的内容："
 $RESTORE_DATA && echo "  ✅ 数据库文件 (bot_data.db)"
 $RESTORE_ENV && echo "  ✅ 配置文件 (.env)"
-$RESTORE_SCRIPT && echo "  ✅ 脚本文件 (host_bot.py, database.py)"
+$RESTORE_SCRIPT && echo "  ✅ 脚本文件 (host_bot.py)"
 echo ""
 read -p "确认恢复？[y/N]: " CONFIRM
 
