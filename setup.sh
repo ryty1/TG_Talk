@@ -828,8 +828,9 @@ while true; do
   echo "4) 手动执行备份"
   echo "5) 从 GitHub 恢复备份"
   echo "6) 返回 VIP 工具箱"
+  echo "7) 退出"
   echo "============================"
-  read -p "请选择操作 [1-6]: " choice
+  read -p "请选择操作 [1-7]: " choice
 
   case "$choice" in
     1)
@@ -863,8 +864,15 @@ while true; do
     6)
       bash <(curl -Ls https://raw.githubusercontent.com/ryty1/Checkin/refs/heads/main/vip.sh)
       ;;
+    7)
+      echo ""
+      echo "👋 感谢使用 Telegram 多 Bot 管理脚本！"
+      echo "💡 提示：您可以随时重新运行此脚本进行管理"
+      echo ""
+      exit 0
+      ;;
     *)
-      echo "❌ 无效选择，请输入 1-6"
+      echo "❌ 无效选择，请输入 1-7"
       ;;
   esac
 done
