@@ -4,7 +4,7 @@ set -e
 APP_DIR="/opt/tg_multi_bot"
 SERVICE_NAME="tg_multi_bot"
 SCRIPT_NAME="host_bot.py"
-SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/host_bot.py"
+SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.0/host_bot.py"
 
 function check_and_install() {
   PKG=$1
