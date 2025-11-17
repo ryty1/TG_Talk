@@ -1,6 +1,6 @@
 # 一键安装/卸载(安装后默认开启自启后台运行)
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/setup.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/v1.0.0/setup.sh)
 ```
 ## Telegram 多 Bot 客服管理 - 快速使用指南
 #### 1. 功能概览
