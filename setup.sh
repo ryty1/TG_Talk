@@ -81,6 +81,15 @@ function setup_github_backup() {
   echo "============================"
   echo ""
   
+  # 确保 Git 已安装
+  if ! command -v git >/dev/null 2>&1; then
+    echo "📦 安装 Git..."
+    apt update -qq >/dev/null 2>&1
+    check_and_install git
+  else
+    echo "✅ Git 已安装"
+  fi
+  
   read -p "🔐 请输入 GitHub 用户名: " GH_USERNAME
   if [ -z "$GH_USERNAME" ]; then
     echo "❌ 用户名不能为空"
@@ -160,6 +169,13 @@ EOF
 git add .
 if git diff --cached --quiet; then
   echo "✅ 数据无变化，跳过备份"
+  # 即使无变化也发送通知
+  if [ -n "$HOST_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+    curl -s -X POST "https://api.telegram.org/bot$HOST_BOT_TOKEN/sendMessage" \
+      -d chat_id="$TG_CHAT_ID" \
+      -d text="📦 自动备份提醒%0A%0A⏰ 时间: $DATE%0A📊 状态: 数据无变化%0A📂 仓库: $GH_USERNAME/$GH_REPO" \
+      >/dev/null 2>&1
+  fi
 else
   git commit -m "自动备份 - $DATE" >/dev/null 2>&1
   
@@ -168,8 +184,24 @@ else
   
   if [ $? -eq 0 ]; then
     echo "✅ 备份成功推送到 GitHub ($DATE)"
+    
+    # 发送成功通知到宿主机器人
+    if [ -n "$HOST_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+      curl -s -X POST "https://api.telegram.org/bot$HOST_BOT_TOKEN/sendMessage" \
+        -d chat_id="$TG_CHAT_ID" \
+        -d text="✅ 自动备份成功%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A📦 状态: 已推送到 GitHub" \
+        >/dev/null 2>&1
+    fi
   else
     echo "❌ 推送失败，请检查 GitHub Token 权限"
+    
+    # 发送失败通知到宿主机器人
+    if [ -n "$HOST_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+      curl -s -X POST "https://api.telegram.org/bot$HOST_BOT_TOKEN/sendMessage" \
+        -d chat_id="$TG_CHAT_ID" \
+        -d text="❌ 自动备份失败%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A⚠️ 原因: GitHub 推送失败" \
+        >/dev/null 2>&1
+    fi
     exit 1
   fi
 fi
@@ -201,15 +233,15 @@ EOF
     return 1
   fi
   
-  # 配置 cron 定时任务（每天凌晨 3 点备份）
-  CRON_CMD="0 3 * * * $APP_DIR/backup.sh >> $APP_DIR/backup.log 2>&1"
+  # 配置 cron 定时任务（每天 23:59 备份）
+  CRON_CMD="59 23 * * * $APP_DIR/backup.sh >> $APP_DIR/backup.log 2>&1"
   
   # 检查 cron 是否已存在
   if crontab -l 2>/dev/null | grep -q "$APP_DIR/backup.sh"; then
     echo "✅ Cron 定时任务已存在"
   else
     (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
-    echo "✅ 已设置每日凌晨 3 点自动备份"
+    echo "✅ 已设置每日 23:59 自动备份"
   fi
   
   echo ""
@@ -217,10 +249,11 @@ EOF
   echo "   备份配置完成！"
   echo "============================"
   echo "📦 仓库地址: https://github.com/$GH_USERNAME/$GH_REPO"
-  echo "⏰ 备份时间: 每天凌晨 3:00"
+  echo "⏰ 备份时间: 每天 23:59"
   echo "📝 备份日志: $APP_DIR/backup.log"
   echo "🔧 手动备份: $APP_DIR/backup.sh"
   echo "🔄 恢复备份: $APP_DIR/restore.sh"
+  echo "📲 备份通知: 已启用（推送到宿主机器人）"
   echo "============================"
   echo ""
 }
@@ -431,6 +464,10 @@ echo ""
 echo "🚀 重启服务..."
 systemctl start $SERVICE_NAME.service
 
+# 清理临时恢复目录
+echo "🧹 清理临时文件..."
+rm -rf "$BACKUP_DIR"
+
 if [ $RESTORED_COUNT -gt 0 ]; then
   echo ""
   echo "============================"
@@ -439,6 +476,7 @@ if [ $RESTORED_COUNT -gt 0 ]; then
   echo "✅ 已恢复 $RESTORED_COUNT 个文件"
   echo "💾 原数据备份于: $BACKUP_OLD_DIR"
   echo "🔧 服务已重启"
+  echo "🧹 临时文件已清理"
   echo "============================"
 else
   echo "⚠️ 未恢复任何文件"
