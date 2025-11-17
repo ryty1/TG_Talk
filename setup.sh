@@ -352,7 +352,7 @@ echo "============================"
 echo "   请选择要恢复的内容"
 echo "============================"
 echo ""
-echo "1) 仅恢复数据文件 (bots.json, msg_map.json, blacklist.json, verified_users.json)"
+echo "1) 仅恢复数据文件 (bot_data.db)"
 echo "2) 恢复数据库 + 配置文件 (.env)"
 echo "3) 恢复数据库 + 脚本文件 (host_bot.py, database.py)"
 echo "4) 恢复全部 (数据 + 配置 + 脚本)"
@@ -388,7 +388,7 @@ case "$RESTORE_OPTION" in
     ;;
   5)
     echo ""
-    read -p "恢复数据文件？[Y/n]: " ans_data
+    read -p "恢复数据文件(bot_data.db)？[Y/n]: " ans_data
     RESTORE_DATA=true
     [[ "$ans_data" =~ ^[Nn]$ ]] && RESTORE_DATA=false
     
@@ -396,7 +396,7 @@ case "$RESTORE_OPTION" in
     RESTORE_ENV=false
     [[ "$ans_env" =~ ^[Yy]$ ]] && RESTORE_ENV=true
     
-    read -p "恢复脚本文件 (host_bot.py)？[y/N]: " ans_script
+    read -p "恢复脚本文件 (host_bot.py, database.py)？[y/N]: " ans_script
     RESTORE_SCRIPT=false
     [[ "$ans_script" =~ ^[Yy]$ ]] && RESTORE_SCRIPT=true
     ;;
@@ -411,7 +411,7 @@ echo ""
 echo "将要恢复的内容："
 $RESTORE_DATA && echo "  ✅ 数据库文件 (bot_data.db)"
 $RESTORE_ENV && echo "  ✅ 配置文件 (.env)"
-$RESTORE_SCRIPT && echo "  ✅ 脚本文件 (host_bot.py)"
+$RESTORE_SCRIPT && echo "  ✅ 脚本文件 (host_bot.py, database.py)"
 echo ""
 read -p "确认恢复？[y/N]: " CONFIRM
 
