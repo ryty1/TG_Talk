@@ -5,6 +5,7 @@ APP_DIR="/opt/tg_multi_bot"
 SERVICE_NAME="tg_multi_bot"
 SCRIPT_NAME="host_bot.py"
 SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/host_bot.py"
+DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/database.py"
 
 function check_and_install() {
   PKG=$1
@@ -139,12 +140,13 @@ if [ ! -d ".git" ]; then
   git remote set-url origin "https://$GH_TOKEN@github.com/$GH_USERNAME/$GH_REPO.git"
 fi
 
-# 复制数据文件
+# 复制数据库文件
 echo "📦 备份数据文件..."
-cp -f "$APP_DIR/bots.json" . 2>/dev/null || echo "{}" > bots.json
-cp -f "$APP_DIR/msg_map.json" . 2>/dev/null || echo "{}" > msg_map.json
-cp -f "$APP_DIR/blacklist.json" . 2>/dev/null || echo "{}" > blacklist.json
-cp -f "$APP_DIR/verified_users.json" . 2>/dev/null || echo "{}" > verified_users.json
+if [ -f "$APP_DIR/bot_data.db" ]; then
+  cp -f "$APP_DIR/bot_data.db" . 2>/dev/null && echo "  ✅ bot_data.db（数据库）"
+else
+  echo "  ⚠️ 未找到数据库文件 bot_data.db"
+fi
 
 # 备份配置文件
 echo "⚙️ 备份配置文件..."
@@ -153,6 +155,7 @@ cp -f "$APP_DIR/.env" . 2>/dev/null || echo "# Empty" > .env
 # 备份脚本文件
 echo "📜 备份脚本文件..."
 cp -f "$APP_DIR/host_bot.py" . 2>/dev/null || touch host_bot.py
+cp -f "$APP_DIR/database.py" . 2>/dev/null && echo "  ✅ database.py"
 
 # 创建备份信息文件
 cat <<EOF > backup_info.txt
@@ -160,9 +163,9 @@ cat <<EOF > backup_info.txt
 服务器: $(hostname)
 Python版本: $(python3 --version 2>&1)
 备份内容:
-  - 数据文件: bots.json, msg_map.json, blacklist.json, verified_users.json
+  - 数据库文件: bot_data.db
   - 配置文件: .env
-  - 脚本文件: host_bot.py
+  - 脚本文件: host_bot.py, database.py
 EOF
 
 # 提交到 GitHub
@@ -326,8 +329,8 @@ echo "   请选择要恢复的内容"
 echo "============================"
 echo ""
 echo "1) 仅恢复数据文件 (bots.json, msg_map.json, blacklist.json, verified_users.json)"
-echo "2) 恢复数据文件 + 配置文件 (.env)"
-echo "3) 恢复数据文件 + 脚本文件 (host_bot.py)"
+echo "2) 恢复数据库 + 配置文件 (.env)"
+echo "3) 恢复数据库 + 脚本文件 (host_bot.py, database.py)"
 echo "4) 恢复全部 (数据 + 配置 + 脚本)"
 echo "5) 自定义选择"
 echo "0) 取消操作"
@@ -382,7 +385,7 @@ esac
 # 确认操作
 echo ""
 echo "将要恢复的内容："
-$RESTORE_DATA && echo "  ✅ 数据文件 (bots.json, msg_map.json, blacklist.json, verified_users.json)"
+$RESTORE_DATA && echo "  ✅ 数据库文件 (bot_data.db)"
 $RESTORE_ENV && echo "  ✅ 配置文件 (.env)"
 $RESTORE_SCRIPT && echo "  ✅ 脚本文件 (host_bot.py)"
 echo ""
@@ -403,44 +406,26 @@ BACKUP_OLD_DIR="$APP_DIR/backup_before_restore_$BACKUP_TIMESTAMP"
 mkdir -p "$BACKUP_OLD_DIR"
 
 echo "💾 备份当前数据到: $BACKUP_OLD_DIR"
-cp -f "$APP_DIR/bots.json" "$BACKUP_OLD_DIR/" 2>/dev/null || true
-cp -f "$APP_DIR/msg_map.json" "$BACKUP_OLD_DIR/" 2>/dev/null || true
-cp -f "$APP_DIR/blacklist.json" "$BACKUP_OLD_DIR/" 2>/dev/null || true
-cp -f "$APP_DIR/verified_users.json" "$BACKUP_OLD_DIR/" 2>/dev/null || true
+cp -f "$APP_DIR/bot_data.db" "$BACKUP_OLD_DIR/" 2>/dev/null || true
 cp -f "$APP_DIR/.env" "$BACKUP_OLD_DIR/" 2>/dev/null || true
 cp -f "$APP_DIR/host_bot.py" "$BACKUP_OLD_DIR/" 2>/dev/null || true
+cp -f "$APP_DIR/database.py" "$BACKUP_OLD_DIR/" 2>/dev/null || true
 
 # 恢复文件
 echo ""
 echo "🔄 开始恢复..."
 RESTORED_COUNT=0
 
-# 恢复数据文件
+# 恢复数据库文件
 if [ "$RESTORE_DATA" = true ]; then
-  echo "📦 恢复数据文件..."
+  echo "📦 恢复数据库文件..."
   
-  if [ -f "$BACKUP_DIR/bots.json" ]; then
-    cp -f "$BACKUP_DIR/bots.json" "$APP_DIR/"
-    echo "  ✅ bots.json"
+  if [ -f "$BACKUP_DIR/bot_data.db" ]; then
+    cp -f "$BACKUP_DIR/bot_data.db" "$APP_DIR/"
+    echo "  ✅ bot_data.db"
     RESTORED_COUNT=$((RESTORED_COUNT + 1))
-  fi
-
-  if [ -f "$BACKUP_DIR/msg_map.json" ]; then
-    cp -f "$BACKUP_DIR/msg_map.json" "$APP_DIR/"
-    echo "  ✅ msg_map.json"
-    RESTORED_COUNT=$((RESTORED_COUNT + 1))
-  fi
-
-  if [ -f "$BACKUP_DIR/blacklist.json" ]; then
-    cp -f "$BACKUP_DIR/blacklist.json" "$APP_DIR/"
-    echo "  ✅ blacklist.json"
-    RESTORED_COUNT=$((RESTORED_COUNT + 1))
-  fi
-
-  if [ -f "$BACKUP_DIR/verified_users.json" ]; then
-    cp -f "$BACKUP_DIR/verified_users.json" "$APP_DIR/"
-    echo "  ✅ verified_users.json"
-    RESTORED_COUNT=$((RESTORED_COUNT + 1))
+  else
+    echo "  ⚠️ 备份中未找到 bot_data.db"
   fi
 fi
 
@@ -467,6 +452,12 @@ if [ "$RESTORE_SCRIPT" = true ]; then
     RESTORED_COUNT=$((RESTORED_COUNT + 1))
   else
     echo "  ⚠️ 备份中未找到 host_bot.py 文件"
+  fi
+  
+  if [ -f "$BACKUP_DIR/database.py" ]; then
+    cp -f "$BACKUP_DIR/database.py" "$APP_DIR/"
+    echo "  ✅ database.py"
+    RESTORED_COUNT=$((RESTORED_COUNT + 1))
   fi
 fi
 
@@ -532,9 +523,25 @@ function install_bot() {
   mkdir -p "$APP_DIR"
   cd "$APP_DIR"
 
-  echo "👾 下载 $SCRIPT_NAME ..."
-  curl -sL -o "$SCRIPT_NAME" "$SCRIPT_URL"
-  echo "✅ 已下载最新 $SCRIPT_NAME"
+  echo "📥 下载项目文件..."
+  
+  # 下载 host_bot.py
+  echo "  • 下载 host_bot.py ..."
+  if curl -sL -o "$SCRIPT_NAME" "$SCRIPT_URL"; then
+    echo "    ✅ host_bot.py"
+  else
+    echo "    ❌ host_bot.py 下载失败"
+    exit 1
+  fi
+  
+  # 下载 database.py
+  echo "  • 下载 database.py ..."
+  if curl -sL -o "database.py" "$DATABASE_URL"; then
+    echo "    ✅ database.py"
+  else
+    echo "    ❌ database.py 下载失败，请手动上传到 $APP_DIR"
+    exit 1
+  fi
 
   echo "🐍 创建虚拟环境..."
   # 清理可能存在的失败虚拟环境
