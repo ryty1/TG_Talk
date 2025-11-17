@@ -123,7 +123,7 @@ cd "$BACKUP_DIR"
 
 # 初始化 Git（如果还没有）
 if [ ! -d ".git" ]; then
-  git init
+  git init -b main
   git config user.name "TG Bot Backup"
   git config user.email "backup@bot.local"
   git remote add origin "https://$GH_TOKEN@github.com/$GH_USERNAME/$GH_REPO.git" 2>/dev/null || \
@@ -160,16 +160,39 @@ EOF
 git add .
 if git diff --cached --quiet; then
   echo "✅ 数据无变化，跳过备份"
+  # 即使无变化也发送通知
+  if [ -n "$HOST_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+    curl -s -X POST "https://api.telegram.org/bot$HOST_BOT_TOKEN/sendMessage" \
+      -d chat_id="$TG_CHAT_ID" \
+      -d text="📦 自动备份提醒%0A%0A⏰ 时间: $DATE%0A📊 状态: 数据无变化%0A📂 仓库: $GH_USERNAME/$GH_REPO" \
+      >/dev/null 2>&1
+  fi
 else
   git commit -m "自动备份 - $DATE" >/dev/null 2>&1
   
   # 强制推送（避免冲突）
-  git push -f origin master >/dev/null 2>&1 || git push -f origin main >/dev/null 2>&1
+  git push -f origin main >/dev/null 2>&1
   
   if [ $? -eq 0 ]; then
     echo "✅ 备份成功推送到 GitHub ($DATE)"
+    
+    # 发送成功通知到宿主机器人
+    if [ -n "$HOST_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+      curl -s -X POST "https://api.telegram.org/bot$HOST_BOT_TOKEN/sendMessage" \
+        -d chat_id="$TG_CHAT_ID" \
+        -d text="✅ 自动备份成功%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A📦 状态: 已推送到 GitHub" \
+        >/dev/null 2>&1
+    fi
   else
     echo "❌ 推送失败，请检查 GitHub Token 权限"
+    
+    # 发送失败通知到宿主机器人
+    if [ -n "$HOST_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+      curl -s -X POST "https://api.telegram.org/bot$HOST_BOT_TOKEN/sendMessage" \
+        -d chat_id="$TG_CHAT_ID" \
+        -d text="❌ 自动备份失败%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A⚠️ 原因: GitHub 推送失败" \
+        >/dev/null 2>&1
+    fi
     exit 1
   fi
 fi
@@ -201,15 +224,15 @@ EOF
     return 1
   fi
   
-  # 配置 cron 定时任务（每天凌晨 3 点备份）
-  CRON_CMD="0 3 * * * $APP_DIR/backup.sh >> $APP_DIR/backup.log 2>&1"
+  # 配置 cron 定时任务（每天 23:59 备份）
+  CRON_CMD="59 23 * * * $APP_DIR/backup.sh >> $APP_DIR/backup.log 2>&1"
   
   # 检查 cron 是否已存在
   if crontab -l 2>/dev/null | grep -q "$APP_DIR/backup.sh"; then
     echo "✅ Cron 定时任务已存在"
   else
     (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
-    echo "✅ 已设置每日凌晨 3 点自动备份"
+    echo "✅ 已设置每日 23:59 自动备份"
   fi
   
   echo ""
@@ -217,10 +240,11 @@ EOF
   echo "   备份配置完成！"
   echo "============================"
   echo "📦 仓库地址: https://github.com/$GH_USERNAME/$GH_REPO"
-  echo "⏰ 备份时间: 每天凌晨 3:00"
+  echo "⏰ 备份时间: 每天 23:59"
   echo "📝 备份日志: $APP_DIR/backup.log"
   echo "🔧 手动备份: $APP_DIR/backup.sh"
   echo "🔄 恢复备份: $APP_DIR/restore.sh"
+  echo "📲 备份通知: 已启用（推送到宿主机器人）"
   echo "============================"
   echo ""
 }
@@ -262,10 +286,10 @@ echo "📥 从 GitHub 拉取备份数据..."
 if [ -d "$BACKUP_DIR/.git" ]; then
   cd "$BACKUP_DIR"
   git fetch origin >/dev/null 2>&1
-  git reset --hard origin/master >/dev/null 2>&1 || git reset --hard origin/main >/dev/null 2>&1
+  git reset --hard origin/main >/dev/null 2>&1
 else
   rm -rf "$BACKUP_DIR"
-  git clone "https://$GH_TOKEN@github.com/$GH_USERNAME/$GH_REPO.git" "$BACKUP_DIR" >/dev/null 2>&1
+  git clone -b main "https://$GH_TOKEN@github.com/$GH_USERNAME/$GH_REPO.git" "$BACKUP_DIR" >/dev/null 2>&1
   cd "$BACKUP_DIR"
 fi
 
@@ -379,25 +403,25 @@ if [ "$RESTORE_DATA" = true ]; then
   if [ -f "$BACKUP_DIR/bots.json" ]; then
     cp -f "$BACKUP_DIR/bots.json" "$APP_DIR/"
     echo "  ✅ bots.json"
-    ((RESTORED_COUNT++))
+    RESTORED_COUNT=$((RESTORED_COUNT + 1))
   fi
 
   if [ -f "$BACKUP_DIR/msg_map.json" ]; then
     cp -f "$BACKUP_DIR/msg_map.json" "$APP_DIR/"
     echo "  ✅ msg_map.json"
-    ((RESTORED_COUNT++))
+    RESTORED_COUNT=$((RESTORED_COUNT + 1))
   fi
 
   if [ -f "$BACKUP_DIR/blacklist.json" ]; then
     cp -f "$BACKUP_DIR/blacklist.json" "$APP_DIR/"
     echo "  ✅ blacklist.json"
-    ((RESTORED_COUNT++))
+    RESTORED_COUNT=$((RESTORED_COUNT + 1))
   fi
 
   if [ -f "$BACKUP_DIR/verified_users.json" ]; then
     cp -f "$BACKUP_DIR/verified_users.json" "$APP_DIR/"
     echo "  ✅ verified_users.json"
-    ((RESTORED_COUNT++))
+    RESTORED_COUNT=$((RESTORED_COUNT + 1))
   fi
 fi
 
@@ -408,7 +432,7 @@ if [ "$RESTORE_ENV" = true ]; then
   if [ -f "$BACKUP_DIR/.env" ]; then
     cp -f "$BACKUP_DIR/.env" "$APP_DIR/"
     echo "  ✅ .env"
-    ((RESTORED_COUNT++))
+    RESTORED_COUNT=$((RESTORED_COUNT + 1))
   else
     echo "  ⚠️ 备份中未找到 .env 文件"
   fi
@@ -421,7 +445,7 @@ if [ "$RESTORE_SCRIPT" = true ]; then
   if [ -f "$BACKUP_DIR/host_bot.py" ]; then
     cp -f "$BACKUP_DIR/host_bot.py" "$APP_DIR/"
     echo "  ✅ host_bot.py"
-    ((RESTORED_COUNT++))
+    RESTORED_COUNT=$((RESTORED_COUNT + 1))
   else
     echo "  ⚠️ 备份中未找到 host_bot.py 文件"
   fi
@@ -431,6 +455,10 @@ echo ""
 echo "🚀 重启服务..."
 systemctl start $SERVICE_NAME.service
 
+# 清理临时恢复目录
+echo "🧹 清理临时文件..."
+rm -rf "$BACKUP_DIR"
+
 if [ $RESTORED_COUNT -gt 0 ]; then
   echo ""
   echo "============================"
@@ -439,6 +467,7 @@ if [ $RESTORED_COUNT -gt 0 ]; then
   echo "✅ 已恢复 $RESTORED_COUNT 个文件"
   echo "💾 原数据备份于: $BACKUP_OLD_DIR"
   echo "🔧 服务已重启"
+  echo "🧹 临时文件已清理"
   echo "============================"
 else
   echo "⚠️ 未恢复任何文件"
@@ -463,6 +492,18 @@ function install_bot() {
     install_python311
   fi
   
+  # 确保 venv 模块存在（根据 Python 版本安装对应的 venv 包）
+  echo "📦 安装 venv 模块..."
+  if [[ "$PYTHON_CMD" == "python3.11" ]]; then
+    check_and_install python3.11-venv
+  elif [[ "$PYTHON_CMD" == "python3.12" ]]; then
+    check_and_install python3.12-venv
+  elif [[ "$PYTHON_CMD" == "python3.13" ]]; then
+    check_and_install python3.13-venv
+  else
+    check_and_install python3-venv
+  fi
+  
   # 确保 pip 存在
   if ! command -v pip3 >/dev/null 2>&1; then
     apt install -y -qq python3-pip >/dev/null 2>&1
@@ -477,14 +518,35 @@ function install_bot() {
   echo "✅ 已下载最新 $SCRIPT_NAME"
 
   echo "🐍 创建虚拟环境..."
-  if [ ! -d venv ]; then
-    $PYTHON_CMD -m venv venv >/dev/null 2>&1
+  # 清理可能存在的失败虚拟环境
+  if [ -d venv ] && [ ! -f venv/bin/activate ]; then
+    echo "⚠️ 检测到损坏的虚拟环境，正在清理..."
+    rm -rf venv
   fi
-  source venv/bin/activate
   
-  # 显示 Python 版本
-  VENV_PYTHON_VERSION=$(python --version 2>&1)
-  echo "✅ 虚拟环境 Python: $VENV_PYTHON_VERSION"
+  # 创建虚拟环境
+  if [ ! -d venv ]; then
+    if $PYTHON_CMD -m venv venv; then
+      echo "✅ 虚拟环境创建成功"
+    else
+      echo "❌ 虚拟环境创建失败"
+      echo "请手动执行以下命令检查问题："
+      echo "  cd $APP_DIR"
+      echo "  $PYTHON_CMD -m venv venv"
+      exit 1
+    fi
+  fi
+  
+  # 激活虚拟环境
+  if [ -f venv/bin/activate ]; then
+    source venv/bin/activate
+    # 显示 Python 版本
+    VENV_PYTHON_VERSION=$(python --version 2>&1)
+    echo "✅ 虚拟环境 Python: $VENV_PYTHON_VERSION"
+  else
+    echo "❌ 虚拟环境激活文件不存在"
+    exit 1
+  fi
 
   echo "⬆️ 检查 Python 依赖..."
   pip install --upgrade pip >/dev/null 2>&1
