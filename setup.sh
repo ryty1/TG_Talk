@@ -261,14 +261,88 @@ EOF
   # 创建恢复脚本
   setup_restore_script
   
-  # 测试备份
-  echo "🧪 测试备份功能..."
-  if "$APP_DIR/backup.sh"; then
-    echo "✅ 备份测试成功"
+  # 检查远程仓库是否有备份数据
+  echo ""
+  echo "🔍 检查远程仓库是否存在备份数据..."
+  
+  # 尝试克隆仓库（只获取信息，不影响本地）
+  TEMP_CHECK_DIR="/tmp/tg_backup_check_$$"
+  if git clone --depth 1 -q "https://$GH_TOKEN@github.com/$GH_USERNAME/$GH_REPO.git" "$TEMP_CHECK_DIR" 2>/dev/null; then
+    # 检查是否有备份文件
+    if [ -f "$TEMP_CHECK_DIR/bot_data.db" ] || [ -f "$TEMP_CHECK_DIR/backup_info.txt" ]; then
+      echo "✅ 发现远程备份数据！"
+      echo ""
+      
+      # 显示备份信息
+      if [ -f "$TEMP_CHECK_DIR/backup_info.txt" ]; then
+        echo "📋 备份信息："
+        cat "$TEMP_CHECK_DIR/backup_info.txt"
+        echo ""
+      fi
+      
+      # 询问是否恢复
+      read -p "❓ 是否从 GitHub 恢复备份数据？[y/N]: " RESTORE_CONFIRM
+      
+      if [[ "$RESTORE_CONFIRM" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "🔄 开始恢复备份数据..."
+        
+        # 停止服务（如果正在运行）
+        systemctl stop $SERVICE_NAME.service 2>/dev/null || true
+        
+        # 备份当前数据（如果存在）
+        if [ -f "$APP_DIR/bot_data.db" ]; then
+          BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          BACKUP_OLD_DIR="$APP_DIR/backup_before_restore_$BACKUP_TIMESTAMP"
+          mkdir -p "$BACKUP_OLD_DIR"
+          echo "💾 备份当前数据到: $BACKUP_OLD_DIR"
+          cp -f "$APP_DIR/bot_data.db" "$BACKUP_OLD_DIR/" 2>/dev/null || true
+          cp -f "$APP_DIR/.env" "$BACKUP_OLD_DIR/" 2>/dev/null || true
+        fi
+        
+        # 恢复数据库文件
+        if [ -f "$TEMP_CHECK_DIR/bot_data.db" ]; then
+          cp -f "$TEMP_CHECK_DIR/bot_data.db" "$APP_DIR/"
+          echo "  ✅ 已恢复 bot_data.db"
+        fi
+        
+        # 恢复脚本文件（可选）
+        if [ -f "$TEMP_CHECK_DIR/host_bot.py" ]; then
+          read -p "   是否同时恢复 host_bot.py？[y/N]: " RESTORE_SCRIPT
+          if [[ "$RESTORE_SCRIPT" =~ ^[Yy]$ ]]; then
+            cp -f "$TEMP_CHECK_DIR/host_bot.py" "$APP_DIR/"
+            echo "  ✅ 已恢复 host_bot.py"
+          fi
+        fi
+        
+        if [ -f "$TEMP_CHECK_DIR/database.py" ]; then
+          read -p "   是否同时恢复 database.py？[y/N]: " RESTORE_DB_SCRIPT
+          if [[ "$RESTORE_DB_SCRIPT" =~ ^[Yy]$ ]]; then
+            cp -f "$TEMP_CHECK_DIR/database.py" "$APP_DIR/"
+            echo "  ✅ 已恢复 database.py"
+          fi
+        fi
+        
+        # 重启服务
+        systemctl start $SERVICE_NAME.service 2>/dev/null || true
+        
+        echo ""
+        echo "✅ 备份数据恢复完成！"
+      else
+        echo "⏭️  跳过恢复，使用全新数据"
+      fi
+    else
+      echo "ℹ️  远程仓库为空，这将是首次备份"
+    fi
+    
+    # 清理临时目录
+    rm -rf "$TEMP_CHECK_DIR"
   else
-    echo "⚠️ 备份测试失败，请检查配置"
-    return 1
+    echo "ℹ️  远程仓库不存在或为空，这将是首次备份"
+    echo "   （仓库会在首次备份时自动创建）"
   fi
+  
+  echo ""
   
   # 配置 cron 定时任务（每天 23:59 备份）
   CRON_CMD="59 23 * * * $APP_DIR/backup.sh >> $APP_DIR/backup.log 2>&1"
@@ -288,9 +362,14 @@ EOF
   echo "📦 仓库地址: https://github.com/$GH_USERNAME/$GH_REPO"
   echo "⏰ 备份时间: 每天 23:59"
   echo "📝 备份日志: $APP_DIR/backup.log"
-  echo "🔧 手动备份: $APP_DIR/backup.sh"
-  echo "🔄 恢复备份: $APP_DIR/restore.sh"
+  echo "🔧 手动备份: bash $APP_DIR/backup.sh"
+  echo "🔄 恢复备份: bash $APP_DIR/restore.sh"
   echo "📲 备份通知: 已启用（推送到宿主机器人）"
+  echo ""
+  echo "⚠️  重要提示："
+  echo "   配置仅保存参数，不会立即执行备份"
+  echo "   首次备份将在今晚 23:59 自动执行"
+  echo "   或手动运行: bash $APP_DIR/backup.sh"
   echo "============================"
   echo ""
 }
