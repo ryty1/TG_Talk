@@ -76,7 +76,9 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/
 
 - VPS 或 可靠环境长期运行。
 
-#### 8. 项目运营中心
+#### 8. 宿主机器人安装 支持 数据 `Github自动备份、Github数据恢复`
+
+#### 9. 项目运营中心
 
 - 如自己不想部署，可直接使用本项目快捷服务 [双向托管机器人](https://t.me/tg_multis_bot)
 
