@@ -8,7 +8,7 @@ import string
 from datetime import datetime
 from functools import partial
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
@@ -1187,10 +1187,31 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if pending_bot_forum and update.message and update.message.text:
         bot_username = pending_bot_forum["bot_username"]
         owner_id = str(update.message.chat.id)
+        gid_text = update.message.text.strip()
+        
+        # 验证群ID格式
         try:
-            gid = int(update.message.text.strip())
+            gid = int(gid_text)
         except ValueError:
             await reply_and_auto_delete(update.message, "❌ 群ID无效，请输入数字。", delay=8)
+            return
+        
+        # 验证格式：必须是 -1 开头的 13 位数字
+        gid_str = str(gid)
+        if not (gid_str.startswith("-100") and len(gid_str) == 14):
+            await update.message.reply_text(
+                f"❌ 群ID格式错误！\n\n"
+                f"你输入的：<code>{gid}</code>\n\n"
+                f"正确格式要求：\n"
+                f"• 必须以 -100 开头\n"
+                f"• 总共 14 位数字（包括负号后13位）\n"
+                f"• 示例：-1004877845787\n\n"
+                f"⚠️ 注意：\n"
+                f"• 请在群组设置页面获取群ID\n"
+                f"• 不要在话题模式下复制的 500 开头的话题ID\n"
+                f"• 话题ID无效，需要的是群组ID",
+                parse_mode="HTML"
+            )
             return
 
         # 写入该 bot 的 forum_group_id
@@ -1198,7 +1219,7 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if b["bot_username"] == bot_username:
                 b["forum_group_id"] = gid
                 save_bots()
-                await update.message.reply_text(f"✅ 已为 @{bot_username} 设置话题群ID：{gid}")
+                await update.message.reply_text(f"✅ 已为 @{bot_username} 设置话题群ID：<code>{gid}</code>", parse_mode="HTML")
                 # 宿主通知
                 now = datetime.now().strftime("%Y-%m-%d %H:%M")
                 user_username = update.message.from_user.username
@@ -1255,6 +1276,22 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     running_apps[bot_username] = new_app
     await new_app.initialize()
     await new_app.start()
+    
+    # 设置子机器人的命令菜单
+    try:
+        commands = [
+            BotCommand("start", "开始使用机器人"),
+            BotCommand("id", "查看用户信息（仅主人可用）"),
+            BotCommand("b", "拉黑用户（仅主人可用）"),
+            BotCommand("ub", "解除拉黑（仅主人可用）"),
+            BotCommand("bl", "查看黑名单（仅主人可用）"),
+            BotCommand("uv", "取消用户验证（仅主人可用）")
+        ]
+        await new_app.bot.set_my_commands(commands)
+        logger.info(f"已为 @{bot_username} 设置命令菜单")
+    except Exception as e:
+        logger.error(f"设置命令菜单失败: {e}")
+    
     await new_app.updater.start_polling()
 
     await update.message.reply_text(
@@ -1431,6 +1468,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # 检查是否已经是当前模式
+        current_mode = target_bot.get("mode", "direct")
+        if current_mode == mode:
+            mode_cn = "私聊模式" if mode == "direct" else "话题模式"
+            await query.message.reply_text(f"ℹ️ @{bot_username} 当前已经是 {mode_cn}，无需切换。")
+            return
+
         target_bot["mode"] = mode
         save_bots()
 
@@ -1447,7 +1491,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("setforum_"):
         bot_username = data.split("_", 1)[1]
         context.user_data["waiting_forum_for"] = {"bot_username": bot_username}
-        await query.message.reply_text(f"💣 请先将 Bot 拉入话题群，给管理员权限\n\n㊙️ 请输入话题群 ID（给 @{bot_username} 使用）：")
+        await query.message.reply_text(
+            f"💣 请先将 Bot 拉入话题群，给管理员权限\n\n"
+            f"㊙️ 请输入话题群 ID（给 @{bot_username} 使用）：\n\n"
+            f"⚠️ 注意事项：\n"
+            f"• 正确格式：-1 开头的 13 位数字\n"
+            f"• 示例：-1004877845787\n"
+            f"• 请在群组设置页面获取群ID\n"
+            f"• 话题模式下 500 开头的话题ID无效"
+        )
         return
 
     if data.startswith("del_"):
@@ -1509,7 +1561,24 @@ async def run_all_bots():
                 # 处理编辑消息 - 使用 filters.UpdateType.EDITED_MESSAGE
                 app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, partial(handle_message, owner_id=int(owner_id), bot_username=bot_username)))
                 running_apps[bot_username] = app
-                await app.initialize(); await app.start(); await app.updater.start_polling()
+                await app.initialize()
+                await app.start()
+                
+                # 设置子机器人的命令菜单
+                try:
+                    commands = [
+                        BotCommand("start", "开始使用机器人"),
+                        BotCommand("id", "查看用户信息"),
+                        BotCommand("b", "拉黑用户"),
+                        BotCommand("ub", "解除拉黑"),
+                        BotCommand("bl", "查看黑名单"),
+                        BotCommand("uv", "取消用户验证")
+                    ]
+                    await app.bot.set_my_commands(commands)
+                except Exception as cmd_err:
+                    logger.error(f"设置命令菜单失败 @{bot_username}: {cmd_err}")
+                
+                await app.updater.start_polling()
                 logger.info(f"启动子Bot: @{bot_username}")
             except Exception as e:
                 logger.error(f"子Bot启动失败: @{bot_username} {e}")
