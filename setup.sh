@@ -192,7 +192,7 @@ else
     if [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
       curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
         -d chat_id="$ADMIN_CHANNEL" \
-        -d text="✅ 自动备份成功%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A📦 状态: 已推送到 GitHub" \
+        -d text="✅ 自动备份成功%0A%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A📦 状态: 已推送到 GitHub%0A⏰ 时间: $DATE" \
         >/dev/null 2>&1
     fi
   else
@@ -202,7 +202,7 @@ else
     if [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
       curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
         -d chat_id="$ADMIN_CHANNEL" \
-        -d text="❌ 自动备份失败%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A⚠️ 原因: GitHub 推送失败" \
+        -d text="❌ 自动备份失败%0A%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A⚠️ 原因: GitHub 推送失败%0A⏰ 时间: $DATE" \
         >/dev/null 2>&1
     fi
     exit 1
