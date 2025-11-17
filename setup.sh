@@ -170,9 +170,9 @@ git add .
 if git diff --cached --quiet; then
   echo "✅ 数据无变化，跳过备份"
   # 即使无变化也发送通知
-  if [ -n "$HOST_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
-    curl -s -X POST "https://api.telegram.org/bot$HOST_BOT_TOKEN/sendMessage" \
-      -d chat_id="$TG_CHAT_ID" \
+  if [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
+    curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
+      -d chat_id="$ADMIN_CHANNEL" \
       -d text="📦 自动备份提醒%0A%0A⏰ 时间: $DATE%0A📊 状态: 数据无变化%0A📂 仓库: $GH_USERNAME/$GH_REPO" \
       >/dev/null 2>&1
   fi
@@ -186,9 +186,9 @@ else
     echo "✅ 备份成功推送到 GitHub ($DATE)"
     
     # 发送成功通知到宿主机器人
-    if [ -n "$HOST_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
-      curl -s -X POST "https://api.telegram.org/bot$HOST_BOT_TOKEN/sendMessage" \
-        -d chat_id="$TG_CHAT_ID" \
+    if [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
+      curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
+        -d chat_id="$ADMIN_CHANNEL" \
         -d text="✅ 自动备份成功%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A📦 状态: 已推送到 GitHub" \
         >/dev/null 2>&1
     fi
@@ -196,9 +196,9 @@ else
     echo "❌ 推送失败，请检查 GitHub Token 权限"
     
     # 发送失败通知到宿主机器人
-    if [ -n "$HOST_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
-      curl -s -X POST "https://api.telegram.org/bot$HOST_BOT_TOKEN/sendMessage" \
-        -d chat_id="$TG_CHAT_ID" \
+    if [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
+      curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
+        -d chat_id="$ADMIN_CHANNEL" \
         -d text="❌ 自动备份失败%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A⚠️ 原因: GitHub 推送失败" \
         >/dev/null 2>&1
     fi
@@ -210,7 +210,17 @@ BACKUP_SCRIPT
   # 设置脚本权限
   chmod +x "$APP_DIR/backup.sh"
   
-  # 将 GitHub 配置写入 .env
+  # 将 GitHub 配置写入 .env（检查是否已存在，避免重复）
+  if grep -q "^GH_USERNAME=" "$APP_DIR/.env" 2>/dev/null; then
+    echo "🔄 更新现有 GitHub 配置..."
+    # 删除旧的 GitHub 配置
+    sed -i '/^# GitHub 自动备份配置/d' "$APP_DIR/.env"
+    sed -i '/^GH_USERNAME=/d' "$APP_DIR/.env"
+    sed -i '/^GH_REPO=/d' "$APP_DIR/.env"
+    sed -i '/^GH_TOKEN=/d' "$APP_DIR/.env"
+  fi
+  
+  # 写入新的 GitHub 配置
   cat <<EOF >> "$APP_DIR/.env"
 
 # GitHub 自动备份配置
