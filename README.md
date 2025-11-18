@@ -155,11 +155,11 @@ Bot: ✅ 已将用户 111111 从黑名单移除
 
 | 功能 | 命令 |
 |------|------|
-| 启动服务 | `sudo systemctl start tg_multi_bot` |
-| 停止服务 | `sudo systemctl stop tg_multi_bot` |
-| 重启服务 | `sudo systemctl restart tg_multi_bot` |
-| 查看状态 | `sudo systemctl status tg_multi_bot` |
-| 开机自启 | `sudo systemctl enable tg_multi_bot` |
+| 启动服务 | `systemctl start tg_multi_bot` |
+| 停止服务 | `systemctl stop tg_multi_bot` |
+| 重启服务 | `systemctl restart tg_multi_bot` |
+| 查看状态 | `systemctl status tg_multi_bot` |
+| 关闭自启 | `systemctl disable tg_multi_bot` |
 
 ## 📂 文件结构
 
