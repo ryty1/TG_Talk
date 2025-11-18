@@ -377,20 +377,34 @@ def get_bot_cfg(owner_id, bot_username: str):
     return None
 
 # ================== 宿主机 /start 菜单 ==================
-def manager_main_menu():
+def is_admin(user_id: int) -> bool:
+    """检查用户是否为管理员"""
+    return str(user_id) == str(ADMIN_CHANNEL)
+
+def manager_main_menu(user_id: int):
+    """生成主菜单（普通用户和管理员有不同选项）"""
     keyboard = [
         [InlineKeyboardButton("➕ 添加机器人", callback_data="addbot")],
         [InlineKeyboardButton("🤖 我的机器人", callback_data="mybots")]
     ]
+    
+    # 管理员专属菜单
+    if is_admin(user_id):
+        keyboard.append([InlineKeyboardButton("👥 用户清单", callback_data="admin_users")])
+        keyboard.append([InlineKeyboardButton("📢 广播通知", callback_data="admin_broadcast")])
+        keyboard.append([InlineKeyboardButton("🗑️ 清理失效Bot", callback_data="admin_clean_invalid")])
+    
     return InlineKeyboardMarkup(keyboard)
 
 async def manager_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
-        await update.message.reply_text("📣 欢迎使用客服机器人管理面板\n👇 请选择操作：", reply_markup=manager_main_menu())
+        user_id = update.message.from_user.id
+        await update.message.reply_text("📣 欢迎使用客服机器人管理面板\n👇 请选择操作：", reply_markup=manager_main_menu(user_id))
     elif update.callback_query:
         query = update.callback_query
+        user_id = query.from_user.id
         await query.answer()
-        await query.message.edit_text("📣 欢迎使用客服机器人管理面板\n👇 请选择操作：", reply_markup=manager_main_menu())
+        await query.message.edit_text("📣 欢迎使用客服机器人管理面板\n👇 请选择操作：", reply_markup=manager_main_menu(user_id))
 
 # ================== 子机器人 /start ==================
 async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1222,7 +1236,93 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
         
 # ================== 动态管理 Bot（添加/删除/配置） ==================
 async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """监听用户输入的 token 或话题群ID"""
+    """监听用户输入的 token 或话题群ID 或广播消息"""
+    # ----- 等待广播消息 -----
+    if context.user_data.get("waiting_broadcast"):
+        if not is_admin(update.message.from_user.id):
+            await reply_and_auto_delete(update.message, "⚠️ 仅管理员可用", delay=5)
+            context.user_data.pop("waiting_broadcast", None)
+            return
+        
+        broadcast_msg = update.message.text.strip()
+        if not broadcast_msg:
+            await reply_and_auto_delete(update.message, "❌ 消息内容不能为空", delay=5)
+            return
+        
+        context.user_data.pop("waiting_broadcast", None)
+        
+        # 获取所有托管机器人的用户（owner）
+        all_owners = list(bots_data.keys())
+        
+        if not all_owners:
+            await update.message.reply_text("⚠️ 暂无托管用户")
+            return
+        
+        # 发送广播
+        success_count = 0
+        fail_count = 0
+        fail_users = []
+        
+        status_msg = await update.message.reply_text(
+            f"📢 开始广播...\n\n"
+            f"总用户数: {len(all_owners)}\n"
+            f"成功: {success_count}\n"
+            f"失败: {fail_count}"
+        )
+        
+        for idx, owner_id in enumerate(all_owners, 1):
+            try:
+                owner_id_int = int(owner_id)
+                # 使用管理机器人发送消息
+                await context.bot.send_message(
+                    chat_id=owner_id_int,
+                    text=f"📢 系统广播\n\n{broadcast_msg}"
+                )
+                success_count += 1
+            except Exception as e:
+                fail_count += 1
+                fail_users.append((owner_id, str(e)))
+                logger.error(f"广播失败 - 用户 {owner_id}: {e}")
+            
+            # 每10个用户更新一次状态
+            if idx % 10 == 0:
+                try:
+                    await status_msg.edit_text(
+                        f"📢 广播中...\n\n"
+                        f"进度: {idx}/{len(all_owners)}\n"
+                        f"成功: {success_count}\n"
+                        f"失败: {fail_count}"
+                    )
+                except:
+                    pass
+        
+        # 最终结果
+        result_text = (
+            f"✅ 广播完成\n\n"
+            f"总用户数: {len(all_owners)}\n"
+            f"✅ 成功: {success_count}\n"
+            f"❌ 失败: {fail_count}"
+        )
+        
+        if fail_users and len(fail_users) <= 10:
+            result_text += "\n\n失败列表："
+            for owner_id, reason in fail_users:
+                result_text += f"\n• ID:{owner_id} - {reason}"
+        
+        await status_msg.edit_text(result_text)
+        
+        # 记录到管理频道
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        admin_username = update.message.from_user.username
+        admin_display = f"@{admin_username}" if admin_username else f"管理员 {update.message.from_user.id}"
+        await send_admin_log(
+            f"📢 {admin_display} 发送广播\n"
+            f"成功: {success_count}/{len(all_owners)}\n"
+            f"时间: {now}"
+        )
+        
+        return
+    
     # ----- 等待设置话题群ID -----
     pending_bot_forum = context.user_data.get("waiting_forum_for")
     if pending_bot_forum and update.message and update.message.text:
@@ -1333,12 +1433,12 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 设置子机器人的命令菜单
     try:
         commands = [
-            BotCommand("start", "开始使用机器人"),
-            BotCommand("id", "查看用户信息（仅主人可用）"),
-            BotCommand("b", "拉黑用户（仅主人可用）"),
-            BotCommand("ub", "解除拉黑（仅主人可用）"),
-            BotCommand("bl", "查看黑名单（仅主人可用）"),
-            BotCommand("uv", "取消用户验证（仅主人可用）")
+            BotCommand("start", "开始使用"),
+            BotCommand("id", "查看用户"),
+            BotCommand("b", "拉黑用户"),
+            BotCommand("ub", "解除拉黑"),
+            BotCommand("bl", "查看黑名单"),
+            BotCommand("uv", "取消用户验证")
         ]
         await new_app.bot.set_my_commands(commands)
         logger.info(f"已为 @{bot_username} 设置命令菜单")
@@ -1378,6 +1478,245 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
     except Exception as e:
         logger.error(f"[回调] query.answer() 失败: {e}")
+        return
+
+    # ================== 管理员功能 ==================
+    # 查看所有用户（分页）
+    if data.startswith("admin_users"):
+        if not is_admin(query.from_user.id):
+            await query.answer("⚠️ 仅管理员可用", show_alert=True)
+            return
+        
+        # 解析页码
+        page = 0
+        if "_" in data:
+            parts = data.split("_")
+            if len(parts) == 3 and parts[2].isdigit():
+                page = int(parts[2])
+        
+        # 获取所有托管机器人的用户（从 bots_data）
+        all_users = []
+        for owner_id, owner_data in bots_data.items():
+            if owner_data.get("bots"):
+                # 获取用户信息（从第一个bot获取）
+                bot_usernames = [bot['bot_username'] for bot in owner_data['bots']]
+                all_users.append({
+                    'owner_id': owner_id,
+                    'bot_usernames': bot_usernames,
+                    'bot_count': len(bot_usernames)
+                })
+        
+        if not all_users:
+            await query.message.edit_text("📋 暂无托管用户", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="back_home")]]))
+            return
+        
+        # 分页处理（每页15个）
+        page_size = 15
+        total_pages = (len(all_users) + page_size - 1) // page_size
+        page = max(0, min(page, total_pages - 1))
+        
+        start_idx = page * page_size
+        end_idx = min(start_idx + page_size, len(all_users))
+        page_users = all_users[start_idx:end_idx]
+        
+        # 构建用户列表文本
+        text = f"👥 托管用户列表（共 {len(all_users)} 人）\n"
+        text += f"📄 第 {page + 1}/{total_pages} 页\n\n"
+        
+        for idx, user_info in enumerate(page_users, start=start_idx + 1):
+            # 获取用户信息
+            try:
+                owner_id_int = int(user_info['owner_id'])
+                # 尝试通过任意一个bot获取用户信息
+                user_display = f"ID: {owner_id_int}"
+                for bot_username in user_info['bot_usernames'][:1]:  # 只取第一个bot
+                    if bot_username in running_apps:
+                        try:
+                            chat = await running_apps[bot_username].bot.get_chat(owner_id_int)
+                            if chat.username:
+                                user_display = f"@{chat.username}"
+                            elif chat.first_name:
+                                user_display = chat.first_name
+                            break
+                        except:
+                            pass
+            except:
+                user_display = f"ID: {user_info['owner_id']}"
+            
+            # 显示用户的bot列表
+            bot_list = ", ".join([f"@{bot}" for bot in user_info['bot_usernames'][:3]])
+            if user_info['bot_count'] > 3:
+                bot_list += f" 等{user_info['bot_count']}个"
+            
+            text += f"{idx}. {user_display}，Bot: {bot_list}\n"
+        
+        # 构建翻页按钮
+        keyboard = []
+        nav_buttons = []
+        
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"admin_users_{page - 1}"))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"admin_users_{page + 1}"))
+        
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+        
+        keyboard.append([InlineKeyboardButton("🔙 返回", callback_data="back_home")])
+        
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # 广播通知
+    if data == "admin_broadcast":
+        if not is_admin(query.from_user.id):
+            await query.answer("⚠️ 仅管理员可用", show_alert=True)
+            return
+        
+        await query.message.edit_text(
+            "📢 广播通知功能\n\n"
+            "请输入要广播的消息内容：\n\n"
+            "⚠️ 注意：消息将发送给所有托管机器人的用户",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 取消", callback_data="back_home")]])
+        )
+        context.user_data["waiting_broadcast"] = True
+        return
+    
+    # 清理失效Bot
+    if data == "admin_clean_invalid":
+        if not is_admin(query.from_user.id):
+            await query.answer("⚠️ 仅管理员可用", show_alert=True)
+            return
+        
+        await query.message.edit_text(
+            "🗑️ 正在检测失效的机器人...\n\n"
+            "请稍候..."
+        )
+        
+        # 检测所有bot的token有效性
+        all_bots = db.get_all_bots()
+        invalid_bots = []
+        valid_count = 0
+        
+        for bot_username, bot_info in all_bots.items():
+            try:
+                # 尝试验证token
+                from telegram import Bot
+                test_bot = Bot(token=bot_info['token'])
+                await test_bot.get_me()
+                valid_count += 1
+            except Exception as e:
+                invalid_bots.append({
+                    'username': bot_username,
+                    'owner': bot_info['owner'],
+                    'token': bot_info['token'][:20] + "...",
+                    'error': str(e)
+                })
+        
+        if not invalid_bots:
+            await query.message.edit_text(
+                f"✅ 检测完成\n\n"
+                f"有效机器人: {valid_count} 个\n"
+                f"失效机器人: 0 个\n\n"
+                f"🎉 所有机器人都正常！",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="back_home")]])
+            )
+            return
+        
+        # 显示失效bot列表
+        text = f"🗑️ 失效机器人列表\n\n"
+        text += f"✅ 有效: {valid_count} 个\n"
+        text += f"❌ 失效: {len(invalid_bots)} 个\n\n"
+        
+        for idx, bot in enumerate(invalid_bots[:10], 1):  # 最多显示10个
+            text += f"{idx}. @{bot['username']}\n"
+            text += f"   Owner ID: {bot['owner']}\n\n"
+        
+        if len(invalid_bots) > 10:
+            text += f"\n... 还有 {len(invalid_bots) - 10} 个\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("🗑️ 删除所有失效Bot", callback_data="admin_confirm_clean")],
+            [InlineKeyboardButton("🔙 取消", callback_data="back_home")]
+        ]
+        
+        # 保存失效bot列表到上下文
+        context.user_data["invalid_bots"] = [bot['username'] for bot in invalid_bots]
+        
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # 确认删除失效Bot
+    if data == "admin_confirm_clean":
+        if not is_admin(query.from_user.id):
+            await query.answer("⚠️ 仅管理员可用", show_alert=True)
+            return
+        
+        invalid_bots = context.user_data.get("invalid_bots", [])
+        if not invalid_bots:
+            await query.answer("⚠️ 没有待清理的机器人", show_alert=True)
+            return
+        
+        await query.message.edit_text(
+            f"🗑️ 正在删除 {len(invalid_bots)} 个失效机器人...\n\n"
+            "请稍候..."
+        )
+        
+        # 删除失效bot
+        deleted_count = 0
+        failed_count = 0
+        
+        for bot_username in invalid_bots:
+            try:
+                # 从数据库删除
+                db.delete_bot(bot_username)
+                
+                # 从内存删除
+                all_bots = db.get_all_bots()
+                for owner_id, owner_data in list(bots_data.items()):
+                    owner_data['bots'] = [b for b in owner_data['bots'] if b['bot_username'] != bot_username]
+                    if not owner_data['bots']:
+                        del bots_data[owner_id]
+                
+                # 停止运行中的bot
+                if bot_username in running_apps:
+                    try:
+                        await running_apps[bot_username].stop()
+                        del running_apps[bot_username]
+                    except:
+                        pass
+                
+                deleted_count += 1
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"删除失效bot {bot_username} 失败: {e}")
+        
+        # 清理上下文
+        context.user_data.pop("invalid_bots", None)
+        
+        # 触发备份
+        trigger_backup(silent=True)
+        
+        result_text = (
+            f"✅ 清理完成\n\n"
+            f"成功删除: {deleted_count} 个\n"
+            f"删除失败: {failed_count} 个\n\n"
+            f"已自动触发备份。"
+        )
+        
+        await query.message.edit_text(
+            result_text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="back_home")]])
+        )
+        
+        # 记录到管理频道
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        await send_admin_log(
+            f"🗑️ 管理员清理失效Bot\n"
+            f"成功: {deleted_count} 个\n"
+            f"失败: {failed_count} 个\n"
+            f"时间: {now}"
+        )
         return
 
     # 新增：处理拉黑/解除拉黑/取消验证按钮
@@ -1512,7 +1851,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "back_home":
-        await query.message.edit_text("📣 欢迎使用客服机器人管理面板\n👇 请选择操作：", reply_markup=manager_main_menu())
+        user_id = query.from_user.id
+        await query.message.edit_text("📣 欢迎使用客服机器人管理面板\n👇 请选择操作：", reply_markup=manager_main_menu(user_id))
         return
 
     if data.startswith("info_"):
@@ -1696,7 +2036,7 @@ async def run_all_bots():
                 try:
                     commands = [
                         BotCommand("start", "开始使用"),
-                        BotCommand("id", "查看用户信息"),
+                        BotCommand("id", "查看用户"),
                         BotCommand("b", "拉黑用户"),
                         BotCommand("ub", "解除拉黑"),
                         BotCommand("bl", "查看黑名单"),
