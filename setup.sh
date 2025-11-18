@@ -167,7 +167,7 @@ fi
 # 复制数据库文件
 echo "📦 备份数据文件..."
 if [ -f "$APP_DIR/bot_data.db" ]; then
-  cp -f "$APP_DIR/bot_data.db" . 2>/dev/null && echo "  ✅ bot_data.db（数据库）"
+  cp -f "$APP_DIR/bot_data.db" . 2>/dev/null && echo "  ✅ db（数据库）"
 else
   echo "  ⚠️ 未找到数据库文件 bot_data.db"
 fi
@@ -179,7 +179,7 @@ cp -f "$APP_DIR/.env" . 2>/dev/null || echo "# Empty" > .env
 # 备份脚本文件
 echo "📜 备份脚本文件..."
 cp -f "$APP_DIR/host_bot.py" . 2>/dev/null || touch host_bot.py
-cp -f "$APP_DIR/database.py" . 2>/dev/null && echo "  ✅ database.py"
+cp -f "$APP_DIR/database.py" . 2>/dev/null && echo "  ✅ py主程序"
 
 # 创建备份信息文件
 cat <<EOF > backup_info.txt
