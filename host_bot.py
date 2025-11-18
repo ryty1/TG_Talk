@@ -6,7 +6,7 @@ import random
 from datetime import datetime
 from functools import partial
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeChat
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
@@ -830,6 +830,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                         db.remove_pending_verification(bot_username, user_id)
                         pending_verifications.pop(verification_key, None)
                         
+                        # 🔧 为 owner 设置命令菜单（如果之前没设置成功）
+                        if user_id == owner_id:
+                            try:
+                                commands = [
+                                    BotCommand("start", "开始使用"),
+                                    BotCommand("id", "查看用户"),
+                                    BotCommand("b", "拉黑用户"),
+                                    BotCommand("ub", "解除拉黑"),
+                                    BotCommand("bl", "查看黑名单"),
+                                    BotCommand("uv", "取消用户验证")
+                                ]
+                                await context.bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=owner_id))
+                                logger.info(f"✅ 已为 @{bot_username} 的拥有者（ID: {owner_id}）设置专属命令菜单")
+                            except Exception as cmd_err:
+                                logger.warning(f"设置命令菜单失败: {cmd_err}")
+                        
                         await message.reply_text(
                             "👋 欢迎回来！\n\n"
                             "--------------------------\n"
@@ -1430,20 +1446,29 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await new_app.initialize()
     await new_app.start()
     
-    # 设置子机器人的命令菜单
+    # 设置子机器人的命令菜单（仅对绑定用户显示）
     try:
-        commands = [
-            BotCommand("start", "开始使用"),
-            BotCommand("id", "查看用户"),
-            BotCommand("b", "拉黑用户"),
-            BotCommand("ub", "解除拉黑"),
-            BotCommand("bl", "查看黑名单"),
-            BotCommand("uv", "取消用户验证")
-        ]
-        await new_app.bot.set_my_commands(commands)
-        logger.info(f"已为 @{bot_username} 设置命令菜单")
+        # 先清除所有默认命令（全局）
+        await new_app.bot.delete_my_commands()
+        logger.info(f"✅ 已清除 @{bot_username} 的全局命令菜单")
+        
+        # 尝试为 owner 设置命令菜单（如果bot和owner还没对话会失败，这是正常的）
+        try:
+            commands = [
+                BotCommand("start", "开始使用"),
+                BotCommand("id", "查看用户"),
+                BotCommand("b", "拉黑用户"),
+                BotCommand("ub", "解除拉黑"),
+                BotCommand("bl", "查看黑名单"),
+                BotCommand("uv", "取消用户验证")
+            ]
+            await new_app.bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=owner_id))
+            logger.info(f"✅ 已为 @{bot_username} 的拥有者（ID: {owner_id}）设置专属命令菜单")
+        except Exception as scope_err:
+            # Bot还没和owner对话过，等用户首次/start后会自动设置
+            logger.info(f"ℹ️  @{bot_username} 暂未与拥有者建立对话，将在首次对话时设置命令菜单")
     except Exception as e:
-        logger.error(f"设置命令菜单失败: {e}")
+        logger.error(f"❌ 设置命令菜单失败: {e}")
     
     await new_app.updater.start_polling()
 
@@ -1486,6 +1511,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(query.from_user.id):
             await query.answer("⚠️ 仅管理员可用", show_alert=True)
             return
+        
+        # ⏳ 立即显示加载消息（让用户看到反馈）
+        try:
+            await query.message.edit_text("⏳ 正在加载用户列表，请稍候...")
+        except:
+            pass
         
         # 解析页码
         page = 0
@@ -2032,19 +2063,29 @@ async def run_all_bots():
                 await app.initialize()
                 await app.start()
                 
-                # 设置子机器人的命令菜单
+                # 设置子机器人的命令菜单（仅对绑定用户显示）
                 try:
-                    commands = [
-                        BotCommand("start", "开始使用"),
-                        BotCommand("id", "查看用户"),
-                        BotCommand("b", "拉黑用户"),
-                        BotCommand("ub", "解除拉黑"),
-                        BotCommand("bl", "查看黑名单"),
-                        BotCommand("uv", "取消用户验证")
-                    ]
-                    await app.bot.set_my_commands(commands)
+                    # 先清除所有默认命令（全局）
+                    await app.bot.delete_my_commands()
+                    logger.info(f"✅ 已清除 @{bot_username} 的全局命令菜单")
+                    
+                    # 尝试为 owner 设置命令菜单（如果bot和owner还没对话会失败，这是正常的）
+                    try:
+                        commands = [
+                            BotCommand("start", "开始使用"),
+                            BotCommand("id", "查看用户"),
+                            BotCommand("b", "拉黑用户"),
+                            BotCommand("ub", "解除拉黑"),
+                            BotCommand("bl", "查看黑名单"),
+                            BotCommand("uv", "取消用户验证")
+                        ]
+                        await app.bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=int(owner_id)))
+                        logger.info(f"✅ 已为 @{bot_username} 的拥有者（ID: {owner_id}）设置专属命令菜单")
+                    except Exception as scope_err:
+                        # Bot还没和owner对话过，等用户首次/start后会自动设置
+                        logger.info(f"ℹ️  @{bot_username} 暂未与拥有者建立对话，将在首次对话时设置命令菜单")
                 except Exception as cmd_err:
-                    logger.error(f"设置命令菜单失败 @{bot_username}: {cmd_err}")
+                    logger.error(f"❌ 设置命令菜单失败 @{bot_username}: {cmd_err}")
                 
                 await app.updater.start_polling()
                 logger.info(f"启动子Bot: @{bot_username}")
