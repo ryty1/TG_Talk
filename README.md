@@ -3,7 +3,9 @@
 bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/setup.sh)
 ```
 > 一键部署，轻松管理多个 Telegram 客服机器人
-
+> 项目运营中心
+- 如自己不想部署，可直接使用本项目快捷服务 [双向托管机器人](https://t.me/tg_multis_bot)
+  
 ## 📖 简介
 
 这是一个完整的 Telegram 机器人托管解决方案，允许用户通过一个管理机器人来创建和管理多个客服机器人。支持直接消息转发和话题群组两种模式，内置验证码系统防止滥用。
