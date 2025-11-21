@@ -167,7 +167,7 @@ fi
 # 复制数据库文件
 echo "📦 备份数据文件..."
 if [ -f "$APP_DIR/bot_data.db" ]; then
-  cp -f "$APP_DIR/bot_data.db" . 2>/dev/null && echo "  ✅ db（数据库）"
+  cp -f "$APP_DIR/bot_data.db" . 2>/dev/null && echo "  ✅ bot_data.db（数据库）"
 else
   echo "  ⚠️ 未找到数据库文件 bot_data.db"
 fi
@@ -179,7 +179,7 @@ cp -f "$APP_DIR/.env" . 2>/dev/null || echo "# Empty" > .env
 # 备份脚本文件
 echo "📜 备份脚本文件..."
 cp -f "$APP_DIR/host_bot.py" . 2>/dev/null || touch host_bot.py
-cp -f "$APP_DIR/database.py" . 2>/dev/null && echo "  ✅ py主程序"
+cp -f "$APP_DIR/database.py" . 2>/dev/null && echo "  ✅ database.py"
 
 # 创建备份信息文件
 cat <<EOF > backup_info.txt
@@ -344,15 +344,16 @@ EOF
   
   echo ""
   
-  # 配置 cron 定时任务（每天 23:59 备份）
-  CRON_CMD="59 23 * * * $APP_DIR/backup.sh >> $APP_DIR/backup.log 2>&1"
+  # 配置 cron 定时任务（中国时间 23:59 备份）
+  # 使用 TZ 环境变量指定中国时区，不影响系统时区
+  CRON_CMD="59 23 * * * TZ='Asia/Shanghai' $APP_DIR/backup.sh >> $APP_DIR/backup.log 2>&1"
   
   # 检查 cron 是否已存在
   if crontab -l 2>/dev/null | grep -q "$APP_DIR/backup.sh"; then
     echo "✅ Cron 定时任务已存在"
   else
     (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
-    echo "✅ 已设置每日 23:59 自动备份"
+    echo "✅ 已设置每日 23:59 自动备份（中国时间 UTC+8）"
   fi
   
   echo ""
@@ -360,7 +361,7 @@ EOF
   echo "   备份配置完成！"
   echo "============================"
   echo "📦 仓库地址: https://github.com/$GH_USERNAME/$GH_REPO"
-  echo "⏰ 备份时间: 每天 23:59"
+  echo "⏰ 备份时间: 每天 23:59（中国时间 UTC+8）"
   echo "📝 备份日志: $APP_DIR/backup.log"
   echo "🔧 手动备份: bash $APP_DIR/backup.sh"
   echo "🔄 恢复备份: bash $APP_DIR/restore.sh"
@@ -368,7 +369,7 @@ EOF
   echo ""
   echo "⚠️  重要提示："
   echo "   配置仅保存参数，不会立即执行备份"
-  echo "   首次备份将在今晚 23:59 自动执行"
+  echo "   首次备份将在今晚 23:59 自动执行（中国时间）"
   echo "   或手动运行: bash $APP_DIR/backup.sh"
   echo "============================"
   echo ""
