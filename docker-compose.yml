@@ -2,13 +2,28 @@ version: '3.8'
 
 services:
   tg-bot-host:
-    build: .
+    # 使用预构建镜像（推荐）
+    image: ghcr.io/zeroornull/tg_talk:latest
+    # 如果需要本地构建，注释上面的 image 并取消注释下面的 build
+    # build: .
+    
     container_name: tg_multi_bot
     restart: unless-stopped
 
-    # 环境变量配置（从 .env 文件读取）
-    env_file:
-      - .env
+    # 环境变量配置（直接在这里修改）
+    environment:
+      # ========== 必需配置 ==========
+      # 1. 管理机器人 Token（从 @BotFather 获取）
+      MANAGER_TOKEN: "YOUR_BOT_TOKEN_HERE"
+      
+      # 2. 管理员频道/群组 ID（接收通知的频道/群组）
+      ADMIN_CHANNEL: "-1001234567890"
+      
+      # ========== 可选配置 ==========
+      # GitHub 自动备份配置（如需备份到 GitHub，取消注释并填写）
+      # GH_USERNAME: "your_github_username"
+      # GH_REPO: "tg-bot-backup"
+      # GH_TOKEN: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
     # 数据卷挂载（持久化数据库）
     volumes:
@@ -21,15 +36,10 @@ services:
         max-size: "10m"
         max-file: "3"
 
-    # 健康检查（可选）
+    # 健康检查
     healthcheck:
       test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/app/data/bot_data.db') else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-
-# 数据卷定义（可选，如果需要使用命名卷）
-# volumes:
-#   bot_data:
-#     driver: local
