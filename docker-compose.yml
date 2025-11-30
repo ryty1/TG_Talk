@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  tg-bot-host:
+    build: .
+    container_name: tg_multi_bot
+    restart: unless-stopped
+
+    # 环境变量配置（从 .env 文件读取）
+    env_file:
+      - .env
+
+    # 数据卷挂载（持久化数据库）
+    volumes:
+      - ./data:/app/data
+
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # 健康检查（可选）
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/app/data/bot_data.db') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# 数据卷定义（可选，如果需要使用命名卷）
+# volumes:
+#   bot_data:
+#     driver: local
