@@ -1,4 +1,4 @@
-#!/opt/tg_multi_bot/venv/bin/python
+#!/usr/bin/env python3
 import os
 import logging
 import asyncio
@@ -86,13 +86,14 @@ def save_map():
 
 def trigger_backup(silent=False):
     """触发自动备份（异步执行，不阻塞主进程）
-    
+
     Args:
         silent: 是否静默备份（不推送通知）
     """
     import subprocess
-    backup_script = "/opt/tg_multi_bot/backup.sh"
-    
+    # 使用环境变量配置备份脚本路径，Docker环境下默认使用相对路径
+    backup_script = os.environ.get('BACKUP_SCRIPT_PATH', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backup.sh'))
+
     # 检查备份脚本是否存在
     if not os.path.exists(backup_script):
         logger.info("⏭️  备份脚本不存在，跳过自动备份")

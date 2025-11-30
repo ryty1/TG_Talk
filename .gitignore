@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+env/
+ENV/
+
+# OMn‡ö
+.env
+.env.local
+.env.*.local
+
+# pn“‡ö
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+bot_data.db
+
+# pnîU
+data/
+backup_temp/
+backup_before_restore_*/
+
+# ý‡ö
+*.tar.gz
+*.zip
+*.bak
+*.backup
+tg_bot_backup_*.tar.gz
+
+# å×‡ö
+*.log
+backup.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Í\ûß
+.DS_Store
+Thumbs.db
+
+# 4ö‡ö
+*.tmp
+*.temp

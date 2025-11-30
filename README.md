@@ -1,10 +1,48 @@
-# Telegram 多机器人托管平台，一键安装/卸载(安装后默认开启自启后台运行)
+# Telegram 多机器人托管平台
+
+> 一键部署，轻松管理多个 Telegram 客服机器人
+
+## 🚀 快速部署
+
+### 方式 1：Docker 部署（⭐ 推荐）
+
+**三步快速开始：**
+
 ```bash
+# 1. 下载配置文件
+mkdir tg_multi_bot && cd tg_multi_bot
+curl -O https://raw.githubusercontent.com/zeroornull/TG_Talk/main/docker-compose.yml
+
+# 2. 编辑配置（修改 MANAGER_TOKEN 和 ADMIN_CHANNEL）
+nano docker-compose.yml
+
+# 3. 启动服务
+docker-compose up -d
+```
+
+**优势：**
+- ✅ 跨平台支持（Linux/Windows/macOS）
+- ✅ 环境隔离，无依赖冲突
+- ✅ 一键更新，轻松维护
+- ✅ 3分钟完成部署
+
+📖 [查看详细 Docker 部署文档](./README_DOCKER.md) | 📄 [快速入门指南](./QUICKSTART_DOCKER.md)
+
+---
+
+### 方式 2：传统部署（仅 Linux）
+
+```bash
+# 一键安装/卸载（安装后默认开启自启后台运行）
 bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/setup.sh)
 ```
-> 一键部署，轻松管理多个 Telegram 客服机器人
-> 项目运营中心
-- 如自己不想部署，可直接使用本项目快捷服务 [双向托管机器人](https://t.me/tg_multis_bot)
+
+**适用场景：** Linux 服务器环境，需要直接控制系统服务
+
+---
+
+> **项目运营中心**
+> 如不想自己部署，可直接使用本项目快捷服务 [双向托管机器人](https://t.me/tg_multis_bot)
   
 ## 📖 简介
 
@@ -21,14 +59,20 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/
 - 🔄 **自动同步** - GitHub 自动备份，数据安全无忧
 - 👥 **管理员功能** - 用户清单、广播通知、清理失效Bot
 
-## 🚀 快速开始
+## 📦 部署方式对比
 
-安装脚本会自动完成以下操作：
-1. ✅ 检查/安装 Python 3.11+
-2. ✅ 安装依赖包
-3. ✅ 创建虚拟环境
-4. ✅ 配置 systemd 服务
-5. ✅ 设置 GitHub 自动备份（可选）
+| 特性 | Docker 部署 ⭐ | 传统部署 |
+|------|----------------|---------|
+| 支持系统 | Linux/Windows/macOS | 仅 Linux |
+| 部署时间 | ~3 分钟 | ~5 分钟 |
+| 环境隔离 | ✅ 完全隔离 | ❌ 依赖系统 |
+| 维护难度 | ⭐ 简单 | ⭐⭐ 中等 |
+| 更新方式 | `docker-compose pull && up -d` | 手动更新代码 |
+| 推荐场景 | 所有用户 | Linux 服务器专家 |
+
+**Docker 部署** 只需修改两个配置项（Bot Token 和频道 ID），无需关心 Python 版本、依赖安装等问题。
+
+**传统部署** 脚本会自动完成：检查/安装 Python 3.11+、安装依赖包、创建虚拟环境、配置 systemd 服务、设置 GitHub 自动备份（可选）。
 
 ## 📱 使用指南
 
@@ -154,7 +198,18 @@ Bot: ✅ 已将用户 111111 从黑名单移除
 
 ## 🛠️ 常用命令
 
-### 服务管理
+### Docker 部署命令
+
+| 功能 | 命令 |
+|------|------|
+| 启动服务 | `docker-compose up -d` |
+| 停止服务 | `docker-compose down` |
+| 重启服务 | `docker-compose restart` |
+| 查看日志 | `docker-compose logs -f` |
+| 查看状态 | `docker-compose ps` |
+| 更新镜像 | `docker-compose pull && docker-compose up -d` |
+
+### 传统部署命令（systemd）
 
 | 功能 | 命令 |
 |------|------|
@@ -162,9 +217,21 @@ Bot: ✅ 已将用户 111111 从黑名单移除
 | 停止服务 | `systemctl stop tg_multi_bot` |
 | 重启服务 | `systemctl restart tg_multi_bot` |
 | 查看状态 | `systemctl status tg_multi_bot` |
+| 查看日志 | `journalctl -u tg_multi_bot -f` |
 | 关闭自启 | `systemctl disable tg_multi_bot` |
 
 ## 📂 文件结构
+
+### Docker 部署
+
+```
+tg_multi_bot/
+├── docker-compose.yml   # Docker Compose 配置
+└── data/                # 数据目录（自动创建）
+    └── bot_data.db      # SQLite 数据库
+```
+
+### 传统部署
 
 ```
 /opt/tg_multi_bot/
@@ -189,6 +256,19 @@ Bot: ✅ 已将用户 111111 从黑名单移除
 2. **话题模式**：确认 Bot 是群组管理员且话题ID正确
 
 ## 📊 系统要求
+
+### Docker 部署（推荐）
+
+| 项目 | 要求 |
+|------|------|
+| 操作系统 | Linux/Windows/macOS |
+| Docker | 20.10+ |
+| Docker Compose | 1.29+ |
+| 内存 | 最低 512MB（推荐 1GB+） |
+| 磁盘 | 最低 1GB 可用空间 |
+| 网络 | 稳定的互联网连接 |
+
+### 传统部署
 
 | 项目 | 要求 |
 |------|------|

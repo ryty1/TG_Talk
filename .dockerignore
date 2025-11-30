@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+env/
+ENV/
+
+# 数据文件
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+bot_data.db
+data/
+backup_temp/
+backup_before_restore_*/
+
+# 配置文件
+.env
+.env.local
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志
+*.log
+backup.log
+
+# 备份脚本（不需要在容器中）
+backup.sh
+restore.sh
+setup.sh
+
+# 文档
+README.md
+LICENSE
+
+# 其他
+.DS_Store
+Thumbs.db
