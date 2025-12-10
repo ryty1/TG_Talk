@@ -1203,7 +1203,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                 topic_id = topics.get(uid_key)
                 user_msg_key = f"{chat_id}_{message.message_id}"
 
-                # 若无映射，先创建话题
+                # 若无映射，先尝试从数据库单独获取（双重保险）
+                if not topic_id:
+                    existing_topic = db.get_mapping(bot_username, "topic", uid_key)
+                    if existing_topic and existing_topic.isdigit():
+                        topic_id = int(existing_topic)
+                        topics[uid_key] = topic_id  # 回写内存
+                        logger.info(f"[话题模式] 从数据库恢复了话题映射: user {chat_id} -> topic {topic_id}")
+
+                # 若仍无映射，才创建新话题
                 if not topic_id:
                     display_name = (
                         message.from_user.full_name
