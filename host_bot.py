@@ -47,8 +47,11 @@ def load_bots():
             "token": bot_info['token'],
             "welcome_msg": bot_info.get('welcome_msg', ''),
             "mode": bot_info.get('mode', 'direct'),
-            "forum_group_id": bot_info.get('forum_group_id')
+            "forum_group_id": bot_info.get('forum_group_id'),
+            "verification_type": bot_info.get('verification_type', 'simple')
         })
+
+
     
     logger.info(f"✅ 从数据库加载了 {len(all_bots)} 个 Bot")
     return bots_data
@@ -461,67 +464,123 @@ async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_msg = get_welcome_message(bot_username)
         await update.message.reply_text(welcome_msg)
     else:
-        # 生成验证码并发送
-        captcha_data = generate_captcha()
-        # 💾 保存到数据库（持久化）
-        db.add_pending_verification(bot_username, user_id, captcha_data['answer'])
-        # 内存中也保留（用于快速访问）
-        verification_key = f"{bot_username}_{user_id}"
-        pending_verifications[verification_key] = captcha_data['answer']
+        # 获取 Bot 配置以确定验证类型（直接从数据库读取，确保是最新的）
+        bot_info = db.get_bot(bot_username)
+        verification_type = bot_info.get('verification_type', 'simple') if bot_info else 'simple'
         
-        # 根据验证码类型构建消息
-        captcha_type = captcha_data['type']
-        
-        if captcha_type == 'math':
+        if verification_type == 'cf':
+
+            # CF Turnstile 验证流程
+            user_name = update.message.from_user.full_name or "匿名用户"
+            user_username = update.message.from_user.username or ""
+            
+            # 发送验证消息（带按钮）
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            
             message_text = (
-                f"🔐 数学验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 请计算：<b>{captcha_data['question']}</b>\n\n"
-                f"💡 提示：请输入计算结果（纯数字）"
+                "🔐 <b>Cloudflare 验证</b>\n\n"
+                "欢迎使用本机器人！\n"
+                "为确保安全，首次使用需要完成验证。\n\n"
+                "📝 请点击下方按钮完成验证：\n\n"
+                "⏰ 验证链接有效期：<b>5分钟</b>\n"
+                "🔗 验证完成后，返回此处继续使用"
             )
-        elif captcha_type == 'sequence':
-            message_text = (
-                f"🔐 逻辑验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 {captcha_data['question']}\n\n"
-                f"💡 提示：观察规律，填入下一个数字"
+            
+            # 先发送消息，获取 message_id
+            sent_message = await update.message.reply_text(
+                message_text,
+                parse_mode="HTML"
             )
-        elif captcha_type == 'chinese':
-            message_text = (
-                f"🔐 中文数字验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 中文数字：<b>{captcha_data['display']}</b>\n\n"
-                f"💡 {captcha_data['question']}"
-            )
-        elif captcha_type == 'logic':
-            message_text = (
-                f"🔐 智力验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 {captcha_data['question']}\n\n"
-                f"💡 提示：简单的逻辑题，输入数字答案"
-            )
-        elif captcha_type == 'time':
-            message_text = (
-                f"🔐 时间验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 时间：<b>{captcha_data['display']}</b>\n\n"
-                f"💡 {captcha_data['question']}"
+            
+            # 创建验证令牌（保存 message_id）
+            token = db.create_verification_token(bot_username, user_id, user_name, user_username, sent_message.message_id)
+            
+            if not token:
+                await update.message.reply_text("❌ 生成验证链接失败，请稍后重试或联系管理员")
+                return
+            
+            # 构建验证 URL
+            verify_url = f"{os.environ.get('VERIFY_SERVER_URL', 'http://localhost:5000')}/verify/{token}"
+            
+            # 编辑消息添加按钮
+            keyboard = [
+                [InlineKeyboardButton("🔗 点击验证", url=verify_url)]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await sent_message.edit_text(
+                message_text,
+                parse_mode="HTML",
+                reply_markup=reply_markup
             )
         else:
-            message_text = (
-                f"🔐 验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 {captcha_data['question']}\n\n"
-                f"💡 提示：请输入答案"
-            )
-        
-        await update.message.reply_text(message_text, parse_mode="HTML")
+            # 简单验证码流程（原有逻辑）
+            captcha_data = generate_captcha()
+            # 💾 保存到数据库（持久化）
+            db.add_pending_verification(bot_username, user_id, captcha_data['answer'])
+            # 内存中也保留（用于快速访问）
+            verification_key = f"{bot_username}_{user_id}"
+            pending_verifications[verification_key] = captcha_data['answer']
+            
+            # 根据验证码类型构建消息
+            captcha_type = captcha_data['type']
+            
+            if captcha_type == 'math':
+                message_text = (
+                    f"🔐 数学验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 请计算：<b>{captcha_data['question']}</b>\n\n"
+                    f"💡 提示：请输入计算结果（纯数字）"
+                )
+            elif captcha_type == 'sequence':
+                message_text = (
+                    f"🔐 逻辑验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 {captcha_data['question']}\n\n"
+                    f"💡 提示：观察规律，填入下一个数字"
+                )
+            elif captcha_type == 'chinese':
+                message_text = (
+                    f"🔐 中文数字验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 中文数字：<b>{captcha_data['display']}</b>\n\n"
+                    f"💡 {captcha_data['question']}"
+                )
+            elif captcha_type == 'logic':
+                message_text = (
+                    f"🔐 智力验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 {captcha_data['question']}\n\n"
+                    f"💡 提示：简单的逻辑题，输入数字答案"
+                )
+            elif captcha_type == 'time':
+                message_text = (
+                    f"🔐 时间验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 时间：<b>{captcha_data['display']}</b>\n\n"
+                    f"💡 {captcha_data['question']}"
+                )
+            else:
+                message_text = (
+                    f"🔐 验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 {captcha_data['question']}\n\n"
+                    f"💡 提示：请输入答案"
+                )
+            
+            await update.message.reply_text(message_text, parse_mode="HTML")
+
+def get_bot_owner(bot_username: str) -> int:
+    """获取 Bot 的 owner ID"""
+    bot_info = db.get_bot(bot_username)
+    return bot_info['owner'] if bot_info else 0
+
 
 # ================== 消息转发逻辑（直连/话题 可切换） ==================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, owner_id: int, bot_username: str):
@@ -723,6 +782,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
             if target_user:
                 if remove_verified_user(bot_username, target_user):
+                    # 清除该用户的待验证状态（内存和数据库）
+                    verification_key = f"{bot_username}_{target_user}"
+                    if verification_key in pending_verifications:
+                        del pending_verifications[verification_key]
+                    db.remove_pending_verification(bot_username, target_user)
+                    
                     await message.reply_text(f"🔓 已取消用户 {target_user} 的验证\n下次发送消息时需要重新验证")
                     
                     # 通知到管理频道 - 获取用户信息
@@ -837,7 +902,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
             
             # 如果用户未验证
             if not is_verified(bot_username, user_id):
-                # 检查是否有待验证的验证码（优先从数据库读取）
+                # 获取 Bot 配置以确定验证类型
+                bot_info = db.get_bot(bot_username)
+                verification_type = bot_info.get('verification_type', 'simple') if bot_info else 'simple'
+                
+                # 如果是 CF 验证模式
+                if verification_type == 'cf':
+                    # CF 模式下，用户发送任何文本（除了命令）都视为未验证，直接提示验证
+                    # 创建验证令牌
+                    user_name = message.from_user.full_name or "匿名用户"
+                    user_username = message.from_user.username or ""
+                    
+                    # 发送验证消息（带按钮）
+                    message_text = (
+                        "🔐 <b>Cloudflare 验证</b>\n\n"
+                        "欢迎使用本机器人！\n"
+                        "为确保安全，首次使用需要完成验证。\n\n"
+                        "📝 请点击下方按钮完成验证：\n\n"
+                        "⏰ 验证链接有效期：<b>5分钟</b>\n"
+                        "🔗 验证完成后，返回此处继续使用"
+                    )
+                    
+                    sent_message = await message.reply_text(
+                        message_text,
+                        parse_mode="HTML"
+                    )
+                    
+                    token = db.create_verification_token(bot_username, user_id, user_name, user_username, sent_message.message_id)
+                    
+                    if token:
+                        verify_url = f"{os.environ.get('VERIFY_SERVER_URL', 'http://localhost:5000')}/verify/{token}"
+                        keyboard = [[InlineKeyboardButton("🔗 点击验证", url=verify_url)]]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        
+                        await sent_message.edit_text(
+                            message_text,
+                            parse_mode="HTML",
+                            reply_markup=reply_markup
+                        )
+                    else:
+                         await message.reply_text("❌ 生成验证链接失败，请稍后重试或联系管理员")
+                    
+                    return
+
+                # 简单验证码模式：检查是否有待验证的验证码（优先从数据库读取）
                 expected_captcha = db.get_pending_verification(bot_username, user_id)
                 
                 # 如果数据库中没有，检查内存
@@ -2021,12 +2129,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("✏️ 设置欢迎语", callback_data=f"set_welcome_{bot_username}")],
             [InlineKeyboardButton("👁️ 预览欢迎语", callback_data=f"preview_welcome_{bot_username}")],
+            [InlineKeyboardButton("🔐 验证设置", callback_data=f"verify_settings_{bot_username}")],
             [InlineKeyboardButton("🛠 话题群ID", callback_data=f"setforum_{bot_username}")],
             [InlineKeyboardButton("🔁 私聊模式", callback_data=f"mode_direct_{bot_username}")],
             [InlineKeyboardButton("🔁 话题模式", callback_data=f"mode_forum_{bot_username}")],
             [InlineKeyboardButton("❌ 断开连接", callback_data=f"del_{bot_username}")],
             [InlineKeyboardButton("🔙 返回", callback_data="mybots")]
         ]
+
         await query.message.edit_text(info_text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
@@ -2071,7 +2181,190 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(f"✅ 已将 @{bot_username} 切换为 {mode_cn_full.split('模式')[0]} 模式。")
 
 
+    # ================== 验证设置管理 ==================
+    
+    # 验证设置菜单
+    if data.startswith("verify_settings_"):
+        bot_username = data.split("_", 2)[2]
+        owner_id = str(query.from_user.id)
+        
+        # 验证权限
+        bots = bots_data.get(owner_id, {}).get("bots", [])
+        target_bot = next((b for b in bots if b["bot_username"] == bot_username), None)
+        if not target_bot:
+            await reply_and_auto_delete(query.message, "⚠️ 找不到这个 Bot。", delay=10)
+            return
+        
+        # 获取当前验证类型
+        current_type = target_bot.get('verification_type', 'simple')
+        
+        # 构建菜单
+        keyboard = [
+            [InlineKeyboardButton(
+                f"{'✅ ' if current_type == 'simple' else ''}简单验证码", 
+                callback_data=f"verify_simple_{bot_username}"
+            )],
+            [InlineKeyboardButton(
+                f"{'✅ ' if current_type == 'cf' else ''}Cloudflare 验证", 
+                callback_data=f"verify_cf_{bot_username}"
+            )],
+            [InlineKeyboardButton("🔙 返回", callback_data=f"info_{bot_username}")]
+        ]
+        
+        verify_type_label = "简单验证码" if current_type == 'simple' else "Cloudflare 验证"
+        
+        info_text = (
+            f"🔐 验证设置 - @{bot_username}\n\n"
+            f"当前验证方式: {verify_type_label}\n\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"📝 验证方式说明：\n\n"
+            f"🔹 简单验证码\n"
+            f"• 数学题、逻辑题等\n"
+            f"• 轻量快速\n"
+            f"🔹 Cloudflare 验证\n"
+            f"• 人机验证\n"
+            f"• 更强的安全性\n"
+            f"━━━━━━━━━━━━━━\n\n"
+            f"点击下方按钮切换验证方式："
+        )
+        
+        await query.message.edit_text(info_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # 切换到简单验证
+    if data.startswith("verify_simple_"):
+        bot_username = data.split("_", 2)[2]
+        owner_id = str(query.from_user.id)
+        
+        # 验证权限
+        bots = bots_data.get(owner_id, {}).get("bots", [])
+        target_bot = next((b for b in bots if b["bot_username"] == bot_username), None)
+        if not target_bot:
+            await query.answer("⚠️ 找不到这个 Bot", show_alert=True)
+            return
+        
+        # 检查是否已经是简单验证
+        current_type = target_bot.get('verification_type', 'simple')
+        if current_type == 'simple':
+            await query.answer("ℹ️ 当前已经是简单验证码模式", show_alert=False)
+            return
+
+        
+        # 更新数据库
+        db.update_bot_verification_type(bot_username, 'simple')
+        # 更新内存
+        target_bot['verification_type'] = 'simple'
+        
+        await query.answer("✅ 已切换到简单验证码", show_alert=True)
+        
+        # 刷新菜单显示（更新勾选状态）
+        # 重新构建键盘
+        keyboard = [
+            [InlineKeyboardButton(
+                "✅ 简单验证码", 
+                callback_data=f"verify_simple_{bot_username}"
+            )],
+            [InlineKeyboardButton(
+                "Cloudflare 验证", 
+                callback_data=f"verify_cf_{bot_username}"
+            )],
+            [InlineKeyboardButton("🔙 返回", callback_data=f"info_{bot_username}")]
+        ]
+        
+        verify_type_label = "简单验证码"
+        current_text = (
+            f"🔐 验证设置 - @{bot_username}\n\n"
+            f"当前验证方式: {verify_type_label}\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "📝 验证方式说明：\n\n"
+            "🔷 简单验证码\n"
+            "• 数学题、逻辑题等\n"
+            "• 轻量快速\n"
+            "• 无需额外配置\n\n"
+            "🔷 Cloudflare 验证\n"
+            "• Cloudflare 人机验证\n"
+            "• 更强的安全性\n"
+            "• 需要CF账号配置\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "点击下方按钮切换验证方式："
+        )
+        
+        await query.edit_message_text(
+            text=current_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    
+    # 切换到 CF 验证
+    if data.startswith("verify_cf_"):
+        bot_username = data.split("_", 2)[2]
+        owner_id = str(query.from_user.id)
+        
+        # 鉴权
+        if str(query.from_user.id) != owner_id:
+            await query.answer("⚠️ 你没有权限管理这个 Bot", show_alert=True)
+            return
+
+        # 验证权限
+        bots = bots_data.get(owner_id, {}).get("bots", [])
+        target_bot = next((b for b in bots if b["bot_username"] == bot_username), None)
+        if not target_bot:
+            await query.answer("⚠️ 找不到这个 Bot", show_alert=True)
+            return
+        
+        # 检查是否已经是 CF 验证
+        current_type = target_bot.get('verification_type', 'simple')
+        if current_type == 'cf':
+            await query.answer("ℹ️ 当前已经是 Cloudflare 验证模式", show_alert=False)
+            return
+
+        
+        # 更新数据库
+        db.update_bot_verification_type(bot_username, 'cf')
+        # 更新内存
+        target_bot['verification_type'] = 'cf'
+        
+        await query.answer("✅ 已切换到 Cloudflare 验证", show_alert=True)
+        
+        # 刷新菜单显示（更新勾选状态）
+        # 重新构建键盘
+        keyboard = [
+            [InlineKeyboardButton(
+                "简单验证码", 
+                callback_data=f"verify_simple_{bot_username}"
+            )],
+            [InlineKeyboardButton(
+                "✅ Cloudflare 验证", 
+                callback_data=f"verify_cf_{bot_username}"
+            )],
+            [InlineKeyboardButton("🔙 返回", callback_data=f"info_{bot_username}")]
+        ]
+        
+        verify_type_label = "Cloudflare 验证"
+        current_text = (
+            f"🔐 验证设置 - @{bot_username}\n\n"
+            f"当前验证方式: {verify_type_label}\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "📝 验证方式说明：\n\n"
+            "🔷 简单验证码\n"
+            "• 数学题、逻辑题等\n"
+            "• 轻量快速\n"
+            "🔷 Cloudflare 验证\n"
+            "• 人机验证\n"
+            "• 更强的安全性\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "点击下方按钮切换验证方式："
+        )
+        
+        await query.edit_message_text(
+            text=current_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
     if data.startswith("setforum_"):
+
         bot_username = data.split("_", 1)[1]
         context.user_data["waiting_forum_for"] = {"bot_username": bot_username}
         await query.message.reply_text(
