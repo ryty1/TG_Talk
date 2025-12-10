@@ -11,7 +11,7 @@
 ```bash
 # 1. 下载配置文件
 mkdir tg_multi_bot && cd tg_multi_bot
-curl -O https://raw.githubusercontent.com/zeroornull/TG_Talk/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/ryty1/TG_Talk/main/docker-compose.yml
 
 # 2. 编辑配置（修改 MANAGER_TOKEN 和 ADMIN_CHANNEL）
 nano docker-compose.yml
