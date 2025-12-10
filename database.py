@@ -815,6 +815,7 @@ def cleanup_old_mappings(days: int = 7) -> int:
             cursor.execute('''
                 DELETE FROM message_mappings 
                 WHERE created_at < datetime('now', '-' || ? || ' days')
+                AND map_type != 'topic'
             ''', (days,))
             deleted = cursor.rowcount
             conn.commit()
