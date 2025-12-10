@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>验证成功</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+            padding: 50px 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+            animation: scaleIn 0.5s ease-out;
+        }
+
+        @keyframes scaleIn {
+            0% {
+                transform: scale(0);
+            }
+
+            50% {
+                transform: scale(1.1);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
+
+        h1 {
+            color: #43e97b;
+            font-size: 32px;
+            margin-bottom: 20px;
+            animation: fadeIn 0.8s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        p {
+            color: #666;
+            font-size: 16px;
+            line-height: 1.8;
+            margin-bottom: 20px;
+        }
+
+        .user-info {
+            background: #f7f9fc;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 30px 0;
+            color: #555;
+        }
+
+        .user-info strong {
+            color: #43e97b;
+        }
+
+        .instruction {
+            background: #fff7e6;
+            border-left: 4px solid #ffa940;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+            text-align: left;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .instruction strong {
+            color: #d46b08;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 25px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(67, 233, 123, 0.3);
+        }
+
+        .back-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(67, 233, 123, 0.4);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="icon">✅</div>
+        <h1>验证成功！</h1>
+        <p>您已成功通过验证，现在可以使用本机器人了。</p>
+
+        {% if user_name %}
+        <div class="user-info">
+            <p><strong>用户：</strong>{{ user_name }}</p>
+            <p><strong>Bot：</strong>@{{ bot_username }}</p>
+        </div>
+        {% endif %}
+
+        <div class="instruction">
+            <strong>📱 下一步：</strong>
+            <p>请返回 Telegram，向 @{{ bot_username }} 发送消息即可开始使用。</p>
+        </div>
+
+        <p style="color: #999; font-size: 14px; margin-top: 30px;">
+            您可以关闭此页面了
+        </p>
+    </div>
+
+    <script>
+        // 3秒后自动关闭窗口
+        setTimeout(function () {
+            window.close();
+            // 如果无法关闭（浏览器限制），显示提示
+            setTimeout(function () {
+                document.body.innerHTML = '<div style="text-align: center; padding: 50px; font-family: sans-serif;"><h2>✅ 验证成功</h2><p>您可以关闭此页面并返回 Telegram</p></div>';
+            }, 500);
+        }, 3000);
+    </script>
+</body>
+
+</html>

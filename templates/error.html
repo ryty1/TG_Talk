@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>验证失败</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+            padding: 50px 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+            animation: shake 0.5s ease-out;
+        }
+
+        @keyframes shake {
+
+            0%,
+            100% {
+                transform: translateX(0);
+            }
+
+            25% {
+                transform: translateX(-10px);
+            }
+
+            75% {
+                transform: translateX(10px);
+            }
+        }
+
+        h1 {
+            color: #fa709a;
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+
+        p {
+            color: #666;
+            font-size: 16px;
+            line-height: 1.8;
+            margin-bottom: 20px;
+        }
+
+        .error-box {
+            background: #fff2f0;
+            border-left: 4px solid #ff4d4f;
+            padding: 20px;
+            border-radius: 4px;
+            margin: 20px 0;
+            text-align: left;
+        }
+
+        .error-box strong {
+            color: #cf1322;
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        .error-detail {
+            color: #666;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .solutions {
+            background: #f7f9fc;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 30px 0;
+            text-align: left;
+        }
+
+        .solutions h3 {
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 15px;
+        }
+
+        .solutions ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .solutions li {
+            padding: 10px 0;
+            color: #666;
+            border-bottom: 1px solid #eee;
+        }
+
+        .solutions li:last-child {
+            border-bottom: none;
+        }
+
+        .solutions li:before {
+            content: '💡';
+            margin-right: 10px;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(250, 112, 154, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(250, 112, 154, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f7f9fc;
+            color: #666;
+            border: 1px solid #ddd;
+        }
+
+        .btn-secondary:hover {
+            background: #e6e9f0;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="icon">❌</div>
+        <h1>验证失败</h1>
+        <p>很抱歉，验证过程中出现了问题。</p>
+
+        <div class="error-box">
+            <strong>错误信息：</strong>
+            <div class="error-detail">{{ error_message }}</div>
+            {% if error_detail %}
+            <div class="error-detail" style="margin-top: 10px; font-size: 13px; color: #999;">
+                {{ error_detail }}
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="solutions">
+            <h3>可能的解决方案：</h3>
+            <ul>
+                <li>返回 Telegram 重新发送 /start 命令</li>
+                <li>检查网络连接是否正常</li>
+                <li>清除浏览器缓存后重试</li>
+                <li>如果问题持续，请联系管理员</li>
+            </ul>
+        </div>
+
+        <div class="action-buttons">
+            <a href="javascript:history.back()" class="btn btn-secondary">返回</a>
+        </div>
+
+        <p style="color: #999; font-size: 14px; margin-top: 30px;">
+            如需帮助，请联系 Bot 管理员
+        </p>
+    </div>
+</body>
+
+</html>
