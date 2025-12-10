@@ -6,6 +6,11 @@ SERVICE_NAME="tg_multi_bot"
 SCRIPT_NAME="host_bot.py"
 SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/host_bot.py"
 DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/database.py"
+VERIFY_SCRIPT_NAME="verify_server.py"
+VERIFY_SERVICE_NAME="tg_verify_server"
+VERIFY_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/verify_server.py"
+# 模板文件基础URL (假设在 templates 目录下)
+TEMPLATES_BASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/templates"
 
 function check_and_install() {
   PKG=$1
@@ -180,6 +185,12 @@ cp -f "$APP_DIR/.env" . 2>/dev/null || echo "# Empty" > .env
 echo "📜 备份脚本文件..."
 cp -f "$APP_DIR/host_bot.py" . 2>/dev/null || touch host_bot.py
 cp -f "$APP_DIR/database.py" . 2>/dev/null && echo "  ✅ database.py"
+cp -f "$APP_DIR/verify_server.py" . 2>/dev/null && echo "  ✅ verify_server.py"
+
+# 备份模板文件
+if [ -d "$APP_DIR/templates" ]; then
+  cp -r "$APP_DIR/templates" . 2>/dev/null && echo "  ✅ templates/ (目录)"
+fi
 
 # 创建备份信息文件
 cat <<EOF > backup_info.txt
@@ -189,7 +200,8 @@ Python版本: $(python3 --version 2>&1)
 备份内容:
   - 数据库文件: bot_data.db
   - 配置文件: .env
-  - 脚本文件: host_bot.py, database.py
+  - 脚本文件: host_bot.py, database.py, verify_server.py
+  - 模板目录: templates/
 EOF
 
 # 提交到 GitHub
@@ -384,6 +396,7 @@ set -e
 APP_DIR="/opt/tg_multi_bot"
 BACKUP_DIR="$APP_DIR/backup_temp"
 SERVICE_NAME="tg_multi_bot"
+VERIFY_SERVICE_NAME="tg_verify_server"
 
 # 加载环境变量
 if [ -f "$APP_DIR/.env" ]; then
@@ -434,7 +447,7 @@ echo "============================"
 echo ""
 echo "1) 仅恢复数据文件 (bot_data.db)"
 echo "2) 恢复数据库 + 配置文件 (.env)"
-echo "3) 恢复数据库 + 脚本文件 (host_bot.py, database.py)"
+echo "3) 恢复数据库 + 脚本 (host_bot, verify_server, templates)"
 echo "4) 恢复全部 (数据 + 配置 + 脚本)"
 echo "5) 自定义选择"
 echo "0) 取消操作"
@@ -476,7 +489,7 @@ case "$RESTORE_OPTION" in
     RESTORE_ENV=false
     [[ "$ans_env" =~ ^[Yy]$ ]] && RESTORE_ENV=true
     
-    read -p "恢复脚本文件 (host_bot.py, database.py)？[y/N]: " ans_script
+    read -p "恢复脚本文件 (含 host_bot, verify_server, templates)？[y/N]: " ans_script
     RESTORE_SCRIPT=false
     [[ "$ans_script" =~ ^[Yy]$ ]] && RESTORE_SCRIPT=true
     ;;
@@ -491,7 +504,7 @@ echo ""
 echo "将要恢复的内容："
 $RESTORE_DATA && echo "  ✅ 数据库文件 (bot_data.db)"
 $RESTORE_ENV && echo "  ✅ 配置文件 (.env)"
-$RESTORE_SCRIPT && echo "  ✅ 脚本文件 (host_bot.py, database.py)"
+$RESTORE_SCRIPT && echo "  ✅ 脚本文件 (host_bot.py, verify_server.py, templates/)"
 echo ""
 read -p "确认恢复？[y/N]: " CONFIRM
 
@@ -503,6 +516,7 @@ fi
 echo ""
 echo "🛑 停止服务..."
 systemctl stop $SERVICE_NAME.service 2>/dev/null || true
+systemctl stop $VERIFY_SERVICE_NAME.service 2>/dev/null || true
 
 # 备份当前数据（以防万一）
 BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -514,6 +528,10 @@ cp -f "$APP_DIR/bot_data.db" "$BACKUP_OLD_DIR/" 2>/dev/null || true
 cp -f "$APP_DIR/.env" "$BACKUP_OLD_DIR/" 2>/dev/null || true
 cp -f "$APP_DIR/host_bot.py" "$BACKUP_OLD_DIR/" 2>/dev/null || true
 cp -f "$APP_DIR/database.py" "$BACKUP_OLD_DIR/" 2>/dev/null || true
+cp -f "$APP_DIR/verify_server.py" "$BACKUP_OLD_DIR/" 2>/dev/null || true
+if [ -d "$APP_DIR/templates" ]; then
+    cp -r "$APP_DIR/templates" "$BACKUP_OLD_DIR/" 2>/dev/null || true
+fi
 
 # 恢复文件
 echo ""
@@ -563,11 +581,24 @@ if [ "$RESTORE_SCRIPT" = true ]; then
     echo "  ✅ database.py"
     RESTORED_COUNT=$((RESTORED_COUNT + 1))
   fi
+  
+  if [ -f "$BACKUP_DIR/verify_server.py" ]; then
+    cp -f "$BACKUP_DIR/verify_server.py" "$APP_DIR/"
+    echo "  ✅ verify_server.py"
+    RESTORED_COUNT=$((RESTORED_COUNT + 1))
+  fi
+  
+  if [ -d "$BACKUP_DIR/templates" ]; then
+    cp -r "$BACKUP_DIR/templates" "$APP_DIR/"
+    echo "  ✅ templates/"
+    RESTORED_COUNT=$((RESTORED_COUNT + 1))
+  fi
 fi
 
 echo ""
 echo "🚀 重启服务..."
 systemctl start $SERVICE_NAME.service
+systemctl start $VERIFY_SERVICE_NAME.service
 
 # 清理临时恢复目录
 echo "🧹 清理临时文件..."
@@ -586,6 +617,7 @@ if [ $RESTORED_COUNT -gt 0 ]; then
 else
   echo "⚠️ 未恢复任何文件"
   systemctl start $SERVICE_NAME.service
+  systemctl start $VERIFY_SERVICE_NAME.service
 fi
 RESTORE_SCRIPT
 
@@ -647,6 +679,31 @@ function install_bot() {
     exit 1
   fi
 
+  # 下载 verify_server.py
+  echo "  • 下载 $VERIFY_SCRIPT_NAME ..."
+  if curl -sL -o "$VERIFY_SCRIPT_NAME" "$VERIFY_SCRIPT_URL"; then
+    echo "    ✅ $VERIFY_SCRIPT_NAME"
+  else
+    echo "    ❌ $VERIFY_SCRIPT_NAME 下载失败，将创建一个空文件待手动上传"
+    touch "$VERIFY_SCRIPT_NAME"
+  fi
+
+  # 创建模板目录并下载模板
+  echo "📂 创建模板目录..."
+  mkdir -p "$APP_DIR/templates"
+  
+  echo "  • 下载 HTML 模板..."
+  # 模板文件列表
+  TEMPLATES=("verify.html" "success.html" "error.html")
+  
+  for tmpl in "${TEMPLATES[@]}"; do
+      if curl -sL -o "$APP_DIR/templates/$tmpl" "$TEMPLATES_BASE_URL/$tmpl"; then
+        echo "    ✅ templates/$tmpl"
+      else
+        echo "    ⚠️ templates/$tmpl 下载失败，请手动上传"
+      fi
+  done
+
   echo "🐍 创建虚拟环境..."
   # 清理可能存在的失败虚拟环境
   if [ -d venv ] && [ ! -f venv/bin/activate ]; then
@@ -695,6 +752,10 @@ function install_bot() {
   else
     echo "✅ 已安装 python-dotenv，跳过"
   fi
+  
+  # 安装 verify_server 依赖
+  echo "📦 安装 Flask (用于验证服务器) ..."
+  pip install -q flask requests
 
   # ------------------ 环境变量 ------------------
   echo "⚙️ 生成环境变量 (.env)..."
@@ -718,15 +779,42 @@ function install_bot() {
       fi
   done
 
+  echo ""
+  echo "🔐 配置 Cloudflare Turnstile (可选，用于增强验证)"
+  read -p "请输入 CF Site Key (留空跳过): " CF_SITE_KEY
+  if [ -n "$CF_SITE_KEY" ]; then
+      read -p "请输入 CF Secret Key: " CF_SECRET_KEY
+      # 验证服务器 URL
+      read -p "请输入验证服务器 URL (例如 https://verify.example.com，不带结尾斜杠): " VERIFY_URL
+      if [ -z "$VERIFY_URL" ]; then
+          # 尝试自动获取 IP
+          PUBLIC_IP=$(curl -s ifconfig.me)
+          VERIFY_URL="http://$PUBLIC_IP"
+          echo "⚠️ 未输入 URL，默认使用 http://$PUBLIC_IP"
+      fi
+  else
+      CF_SECRET_KEY=""
+      VERIFY_URL="http://localhost:80"
+      echo "ℹ️ 跳过 CF 配置，使用默认值"
+  fi
+
   # 写入 .env
   cat <<EOF > .env
 MANAGER_TOKEN=$MANAGER_TOKEN
 ADMIN_CHANNEL=$ADMIN_CHANNEL
+
+# Cloudflare Turnstile 配置
+CF_TURNSTILE_SITE_KEY=$CF_SITE_KEY
+CF_TURNSTILE_SECRET_KEY=$CF_SECRET_KEY
+
+# 验证服务器配置
+VERIFY_SERVER_URL=$VERIFY_URL
+VERIFY_SERVER_PORT=80
 EOF
   echo "✅ 已生成 .env 配置文件"
 
   # ------------------ Systemd 服务 ------------------
-  echo "🛠️ 配置 systemd 服务..."
+  echo "🛠️ 配置 systemd 服务 (Host Bot)..."
   cat <<EOF >/etc/systemd/system/$SERVICE_NAME.service
 [Unit]
 Description=Telegram Multi Bot Host
@@ -744,10 +832,36 @@ EnvironmentFile=$APP_DIR/.env
 WantedBy=multi-user.target
 EOF
 
-  echo "🚀 启动并设置开机自启..."
+  echo "�️ 配置 systemd 服务 (Verify Server)..."
+  cat <<EOF >/etc/systemd/system/$VERIFY_SERVICE_NAME.service
+[Unit]
+Description=Telegram Verify Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+ExecStart=$APP_DIR/venv/bin/python $APP_DIR/$VERIFY_SCRIPT_NAME
+Restart=always
+RestartSec=3
+EnvironmentFile=$APP_DIR/.env
+# Flask on port 80 requires root or capabilities. 
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  echo "�🚀 启动并设置开机自启..."
   systemctl daemon-reload >/dev/null 2>&1
+  
+  # Host Bot
   systemctl enable $SERVICE_NAME.service >/dev/null 2>&1
   systemctl restart $SERVICE_NAME.service >/dev/null 2>&1
+  
+  # Verify Server
+  systemctl enable $VERIFY_SERVICE_NAME.service >/dev/null 2>&1
+  systemctl restart $VERIFY_SERVICE_NAME.service >/dev/null 2>&1
 
   echo ""
   echo "✅ 部署完成！"
@@ -772,8 +886,10 @@ EOF
   echo "============================"
   echo "   部署完成！"
   echo "============================"
-  echo "📊 查看日志: journalctl -u $SERVICE_NAME.service -f"
-  echo "🔧 服务管理: systemctl status/start/stop/restart $SERVICE_NAME"
+  echo "📊 查看日志 (Host): journalctl -u $SERVICE_NAME.service -f"
+  echo "� 查看日志 (Verify): journalctl -u $VERIFY_SERVICE_NAME.service -f"
+  echo "�🔧 服务管理 (Host): systemctl status/restart $SERVICE_NAME"
+  echo "🔧 服务管理 (Verify): systemctl status/restart $VERIFY_SERVICE_NAME"
   echo "📂 项目目录: $APP_DIR"
   if [[ "$SETUP_BACKUP" =~ ^[Yy]$ ]]; then
     echo "📦 备份脚本: $APP_DIR/backup.sh"
@@ -785,18 +901,24 @@ EOF
 function uninstall_bot() {
   echo "🛑 停止服务..."
   systemctl stop $SERVICE_NAME.service >/dev/null 2>&1 || true
+  systemctl stop $VERIFY_SERVICE_NAME.service >/dev/null 2>&1 || true
 
   echo "❌ 禁用开机自启..."
   systemctl disable $SERVICE_NAME.service >/dev/null 2>&1 || true
+  systemctl disable $VERIFY_SERVICE_NAME.service >/dev/null 2>&1 || true
 
   echo "🗑️ 删除 systemd 服务文件..."
   if [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
       rm -f "/etc/systemd/system/$SERVICE_NAME.service"
-      systemctl daemon-reload >/dev/null 2>&1
       echo "✅ 已删除 $SERVICE_NAME.service"
-  else
-      echo "⚠️ 没有找到 systemd 服务文件"
   fi
+  
+  if [ -f "/etc/systemd/system/$VERIFY_SERVICE_NAME.service" ]; then
+      rm -f "/etc/systemd/system/$VERIFY_SERVICE_NAME.service"
+      echo "✅ 已删除 $VERIFY_SERVICE_NAME.service"
+  fi
+  
+  systemctl daemon-reload >/dev/null 2>&1
 
   # 移除 cron 定时任务
   if crontab -l 2>/dev/null | grep -q "$APP_DIR/backup.sh"; then
