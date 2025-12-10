@@ -61,6 +61,11 @@ def init_database():
         except sqlite3.OperationalError:
             pass  # 字段已存在
         
+        try:
+            cursor.execute('ALTER TABLE bots ADD COLUMN verification_type TEXT DEFAULT "simple"')
+        except sqlite3.OperationalError:
+            pass  # 字段已存在
+        
         # 2. 已验证用户表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS verified_users (
@@ -158,6 +163,29 @@ def init_database():
             )
         ''')
         
+        # 6. 验证令牌表（CF验证）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS verification_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token TEXT UNIQUE NOT NULL,
+                bot_username TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                user_name TEXT,
+                user_username TEXT,
+                message_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL
+            )
+        ''')
+        
+        # 添加 message_id 列（兼容旧数据库）
+        try:
+            cursor.execute('ALTER TABLE verification_tokens ADD COLUMN message_id INTEGER')
+            logger.info("✅ verification_tokens 表添加 message_id 列")
+        except Exception:
+            pass  # 列已存在
+
+        
         # 6. 创建索引加速查询（独立语句）
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_verified_users_bot 
@@ -178,6 +206,17 @@ def init_database():
             CREATE INDEX IF NOT EXISTS idx_blacklist_bot 
             ON blacklist(bot_username, user_id)
         ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_verification_tokens_token 
+            ON verification_tokens(token)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_verification_tokens_cleanup 
+            ON verification_tokens(expires_at)
+        ''')
+
         
         conn.commit()
         conn.close()
@@ -216,13 +255,23 @@ def get_bot(bot_username: str) -> Optional[Dict]:
         conn.close()
         
         if row:
+            # 安全地获取 verification_type 字段（兼容旧数据库）
+            try:
+                verification_type = row['verification_type'] if row['verification_type'] else 'simple'
+            except (KeyError, IndexError):
+                verification_type = 'simple'
+            
             return {
                 'bot_username': row['bot_username'],
                 'token': row['token'],
                 'owner': row['owner'],
                 'welcome_msg': row['welcome_msg'] or '',
+                'mode': row.get('mode') if hasattr(row, 'get') else (row['mode'] if 'mode' in row.keys() else 'direct'),
+                'forum_group_id': row.get('forum_group_id') if hasattr(row, 'get') else (row['forum_group_id'] if 'forum_group_id' in row.keys() else None),
+                'verification_type': verification_type,
                 'created_at': row['created_at']
             }
+
         return None
     except Exception as e:
         logger.error(f"❌ 查询 Bot 失败: {e}")
@@ -239,13 +288,21 @@ def get_all_bots() -> Dict[str, Dict]:
         
         bots = {}
         for row in rows:
+            # 安全地获取 verification_type 字段（兼容旧数据库）
+            try:
+                verification_type = row['verification_type'] if row['verification_type'] else 'simple'
+            except (KeyError, IndexError):
+                verification_type = 'simple'
+            
             bots[row['bot_username']] = {
                 'token': row['token'],
                 'owner': row['owner'],
                 'welcome_msg': row['welcome_msg'] or '',
                 'mode': row['mode'] if row['mode'] else 'direct',
-                'forum_group_id': row['forum_group_id']
+                'forum_group_id': row['forum_group_id'],
+                'verification_type': verification_type
             }
+
         
         logger.info(f"📊 从数据库读取了 {len(bots)} 个 Bot")
         return bots
@@ -324,8 +381,33 @@ def update_bot_forum_id(bot_username: str, forum_group_id: int) -> bool:
     except Exception as e:
         logger.error(f"❌ 更新话题群ID失败: {e}")
         return False
+
+def update_bot_verification_type(bot_username: str, verification_type: str) -> bool:
+    """更新机器人验证类型（simple/cf）"""
+    try:
+        with db_lock:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE bots 
+                SET verification_type = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE bot_username = ?
+            ''', (verification_type, bot_username))
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            
+            if affected > 0:
+                logger.info(f"✅ 更新验证类型: {bot_username} -> {verification_type}")
+                return True
+            return False
+    except Exception as e:
+        logger.error(f"❌ 更新验证类型失败: {e}")
+        return False
+
 def delete_bot(bot_username: str) -> bool:
     """删除机器人及其关联数据"""
+
     try:
         with db_lock:
             conn = get_connection()
@@ -1055,7 +1137,135 @@ def delete_global_welcome() -> bool:
     return delete_global_setting('global_welcome_msg')
 
 
+# ================== 验证令牌管理（CF验证）==================
+
+def create_verification_token(bot_username: str, user_id: int, user_name: str = '', user_username: str = '', message_id: int = None) -> Optional[str]:
+    """创建验证令牌（5分钟有效期）"""
+    import secrets
+    from datetime import datetime, timedelta
+    
+    try:
+        # 生成安全的随机令牌
+        token = secrets.token_urlsafe(32)
+        expires_at = (datetime.now() + timedelta(minutes=5)).isoformat()
+        
+        with db_lock:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # 删除该用户的旧令牌（如果存在）
+            cursor.execute('''
+                DELETE FROM verification_tokens 
+                WHERE bot_username = ? AND user_id = ?
+            ''', (bot_username, user_id))
+            
+            # 插入新令牌
+            cursor.execute('''
+                INSERT INTO verification_tokens 
+                (token, bot_username, user_id, user_name, user_username, message_id, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (token, bot_username, user_id, user_name, user_username, message_id, expires_at))
+            
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ 创建验证令牌: {bot_username} - {user_id}")
+            return token
+    except Exception as e:
+        logger.error(f"❌ 创建验证令牌失败: {e}")
+        return None
+
+
+def get_verification_token(token: str) -> Optional[Dict]:
+    """获取验证令牌信息（如果有效）"""
+    from datetime import datetime
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT * FROM verification_tokens 
+            WHERE token = ?
+        ''', (token,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return None
+        
+        # 检查是否过期
+        expires_at = datetime.fromisoformat(row['expires_at'])
+        if datetime.now() > expires_at:
+            logger.info(f"⏰ 验证令牌已过期: {token[:10]}...")
+            return None
+        
+        return {
+            'token': row['token'],
+            'bot_username': row['bot_username'],
+            'user_id': row['user_id'],
+            'user_name': row['user_name'],
+            'user_username': row['user_username'],
+            'message_id': row['message_id'] if 'message_id' in row.keys() else None,
+            'created_at': row['created_at'],
+            'expires_at': row['expires_at']
+        }
+    except Exception as e:
+        logger.error(f"❌ 查询验证令牌失败: {e}")
+        return None
+
+
+def delete_verification_token(token: str) -> bool:
+    """删除已使用的验证令牌"""
+    try:
+        with db_lock:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                DELETE FROM verification_tokens 
+                WHERE token = ?
+            ''', (token,))
+            
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            
+            if affected > 0:
+                logger.info(f"✅ 删除验证令牌: {token[:10]}...")
+                return True
+            return False
+    except Exception as e:
+        logger.error(f"❌ 删除验证令牌失败: {e}")
+        return False
+
+
+def cleanup_expired_tokens() -> int:
+    """清理过期的验证令牌"""
+    try:
+        with db_lock:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                DELETE FROM verification_tokens 
+                WHERE expires_at < datetime('now')
+            ''')
+            
+            deleted = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            if deleted > 0:
+                logger.info(f"🧹 清理 {deleted} 个过期验证令牌")
+            return deleted
+    except Exception as e:
+        logger.error(f"❌ 清理过期令牌失败: {e}")
+        return 0
+
+
 # ================== 启动时初始化 ==================
+
 # 模块导入时自动初始化数据库
 init_database()
 
@@ -1063,8 +1273,10 @@ init_database()
 try:
     cleanup_old_pending_verifications(24)  # 清理24小时前的待验证记录
     cleanup_old_mappings(7)  # 清理7天前的消息映射
+    cleanup_expired_tokens()  # 清理过期的CF验证令牌
 except Exception as e:
     logger.error(f"清理过期数据失败: {e}")
+
 if __name__ == '__main__':
     # 测试代码
     print("数据库测试模式")
