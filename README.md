@@ -1,6 +1,6 @@
 # Telegram 多机器人托管平台，一键安装/卸载(安装后默认开启自启后台运行)
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/setup.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/v1.0.2/setup.sh)
 ```
 > 一键部署，轻松管理多个 Telegram 客服机器人
 > 项目运营中心
