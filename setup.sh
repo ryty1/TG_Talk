@@ -4,13 +4,13 @@ set -e
 APP_DIR="/opt/tg_multi_bot"
 SERVICE_NAME="tg_multi_bot"
 SCRIPT_NAME="host_bot.py"
-SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/host_bot.py"
-DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/database.py"
+SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.2/host_bot.py"
+DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.2/database.py"
 VERIFY_SCRIPT_NAME="verify_server.py"
 VERIFY_SERVICE_NAME="tg_verify_server"
-VERIFY_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/verify_server.py"
+VERIFY_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.2/verify_server.py"
 # 模板文件基础URL (假设在 templates 目录下)
-TEMPLATES_BASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/templates"
+TEMPLATES_BASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.2/templates"
 
 function check_and_install() {
   PKG=$1
