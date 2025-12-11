@@ -4,13 +4,13 @@ set -e
 APP_DIR="/opt/tg_multi_bot"
 SERVICE_NAME="tg_multi_bot"
 SCRIPT_NAME="host_bot.py"
-SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.2/host_bot.py"
-DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.2/database.py"
+SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/host_bot.py"
+DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/database.py"
 VERIFY_SCRIPT_NAME="verify_server.py"
 VERIFY_SERVICE_NAME="tg_verify_server"
-VERIFY_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.2/verify_server.py"
+VERIFY_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/verify_server.py"
 # 模板文件基础URL (假设在 templates 目录下)
-TEMPLATES_BASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.2/templates"
+TEMPLATES_BASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/templates"
 
 function check_and_install() {
   PKG=$1
@@ -792,9 +792,16 @@ function install_bot() {
           VERIFY_URL="http://$PUBLIC_IP"
           echo "⚠️ 未输入 URL，默认使用 http://$PUBLIC_IP"
       fi
+
+      # 验证服务器端口
+      read -p "请输入验证服务器端口 (默认 80): " VERIFY_PORT
+      if [ -z "$VERIFY_PORT" ]; then
+          VERIFY_PORT=80
+      fi
   else
       CF_SECRET_KEY=""
       VERIFY_URL="http://localhost:80"
+      VERIFY_PORT=80
       echo "ℹ️ 跳过 CF 配置，使用默认值"
   fi
 
@@ -809,7 +816,7 @@ CF_TURNSTILE_SECRET_KEY=$CF_SECRET_KEY
 
 # 验证服务器配置
 VERIFY_SERVER_URL=$VERIFY_URL
-VERIFY_SERVER_PORT=80
+VERIFY_SERVER_PORT=$VERIFY_PORT
 EOF
   echo "✅ 已生成 .env 配置文件"
 
