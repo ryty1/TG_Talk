@@ -183,7 +183,7 @@ cp -f "$APP_DIR/.env" . 2>/dev/null || echo "# Empty" > .env
 
 # 备份脚本文件
 echo "📜 备份脚本文件..."
-cp -f "$APP_DIR/host_bot.py" . 2>/dev/null || touch host_bot.py
+cp -f "$APP_DIR/host_bot.py" . 2>/dev/null && echo "  ✅ host_bot.py"
 cp -f "$APP_DIR/database.py" . 2>/dev/null && echo "  ✅ database.py"
 cp -f "$APP_DIR/verify_server.py" . 2>/dev/null && echo "  ✅ verify_server.py"
 
