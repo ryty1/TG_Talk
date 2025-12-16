@@ -66,6 +66,17 @@ def init_database():
         except sqlite3.OperationalError:
             pass  # 字段已存在
         
+        try:
+            cursor.execute('ALTER TABLE bots ADD COLUMN custom_captcha_question TEXT')
+            cursor.execute('ALTER TABLE bots ADD COLUMN custom_captcha_answer TEXT')
+        except sqlite3.OperationalError:
+            pass  # 字段已存在
+        
+        try:
+            cursor.execute('ALTER TABLE bots ADD COLUMN custom_captcha_hint TEXT')
+        except sqlite3.OperationalError:
+            pass  # 字段已存在
+        
         # 2. 已验证用户表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS verified_users (
@@ -269,6 +280,9 @@ def get_bot(bot_username: str) -> Optional[Dict]:
                 'mode': row.get('mode') if hasattr(row, 'get') else (row['mode'] if 'mode' in row.keys() else 'direct'),
                 'forum_group_id': row.get('forum_group_id') if hasattr(row, 'get') else (row['forum_group_id'] if 'forum_group_id' in row.keys() else None),
                 'verification_type': verification_type,
+                'custom_captcha_question': row.get('custom_captcha_question') if hasattr(row, 'get') else (row['custom_captcha_question'] if 'custom_captcha_question' in row.keys() else None),
+                'custom_captcha_answer': row.get('custom_captcha_answer') if hasattr(row, 'get') else (row['custom_captcha_answer'] if 'custom_captcha_answer' in row.keys() else None),
+                'custom_captcha_hint': row.get('custom_captcha_hint') if hasattr(row, 'get') else (row['custom_captcha_hint'] if 'custom_captcha_hint' in row.keys() else None),
                 'created_at': row['created_at']
             }
 
@@ -300,7 +314,10 @@ def get_all_bots() -> Dict[str, Dict]:
                 'welcome_msg': row['welcome_msg'] or '',
                 'mode': row['mode'] if row['mode'] else 'direct',
                 'forum_group_id': row['forum_group_id'],
-                'verification_type': verification_type
+                'verification_type': verification_type,
+                'custom_captcha_question': row.get('custom_captcha_question') if hasattr(row, 'get') else (row['custom_captcha_question'] if 'custom_captcha_question' in row.keys() else None),
+                'custom_captcha_answer': row.get('custom_captcha_answer') if hasattr(row, 'get') else (row['custom_captcha_answer'] if 'custom_captcha_answer' in row.keys() else None),
+                'custom_captcha_hint': row.get('custom_captcha_hint') if hasattr(row, 'get') else (row['custom_captcha_hint'] if 'custom_captcha_hint' in row.keys() else None)
             }
 
         
@@ -403,6 +420,39 @@ def update_bot_verification_type(bot_username: str, verification_type: str) -> b
             return False
     except Exception as e:
         logger.error(f"❌ 更新验证类型失败: {e}")
+        return False
+
+def update_bot_custom_captcha(bot_username: str, question: str = None, answer: str = None, hint: str = None) -> bool:
+    """更新自定义验证问题"""
+    try:
+        with db_lock:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # 先确保 hint 字段存在
+            try:
+                cursor.execute('ALTER TABLE bots ADD COLUMN custom_captcha_hint TEXT')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+            
+            cursor.execute('''
+                UPDATE bots 
+                SET custom_captcha_question = ?, 
+                    custom_captcha_answer = ?, 
+                    custom_captcha_hint = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE bot_username = ?
+            ''', (question, answer, hint, bot_username))
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            
+            if affected > 0:
+                logger.info(f"✅ 更新自定义验证: {bot_username} (hint: {'有' if hint else '无'})")
+                return True
+            return False
+    except Exception as e:
+        logger.error(f"❌ 更新自定义验证失败: {e}")
         return False
 
 def delete_bot(bot_username: str) -> bool:
