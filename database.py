@@ -1323,7 +1323,7 @@ init_database()
 # 清理过期数据（可选）
 try:
     cleanup_old_pending_verifications(24)  # 清理24小时前的待验证记录
-    cleanup_old_mappings(7)  # 清理7天前的消息映射
+    cleanup_old_mappings(30)  # 清理30天前的消息映射
     cleanup_expired_tokens()  # 清理过期的CF验证令牌
 except Exception as e:
     logger.error(f"清理过期数据失败: {e}")
