@@ -1,6 +1,6 @@
 # Telegram 多机器人托管平台，一键安装/卸载(安装后默认开启自启后台运行)
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/v1.0.2/setup.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/v1.0.3/setup.sh)
 ```
 > 一键部署，轻松管理多个 Telegram 客服机器人
 > 项目运营中心
@@ -14,7 +14,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/v1.0.
 
 - 🤖 **多机器人管理** - 一个平台管理无数个客服机器人
 - 💬 **双模式支持** - 直接转发模式 / 话题群组模式
-- 🔐 **智能验证** - 6种验证码类型，有效防止垃圾消息  （新增CF验证模式）
+- 🔐 **智能验证** - 8种验证码类型，有效防止垃圾消息  （新增 CF验证 + 人工验证 + 自定义问题 模式）
 - 📣 **自定义欢迎语** - SQLite 数据库存储，支持自动备份   （新增）
 - 📊 **用户管理** - 查看、拉黑、解除拉黑用户
 - 💾 **数据持久化** - SQLite 数据库存储，支持自动备份
