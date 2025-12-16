@@ -554,10 +554,10 @@ async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             
-            # 检查宿主机器人是否运行
-            manager_app = running_apps.get("__manager__")
-            if not manager_app:
-                logger.error("⚠️ 宿主机器人未运行，无法发送人工验证通知")
+            # 检查托管机器人是否运行
+            hosted_app = running_apps.get(bot_username)
+            if not hosted_app:
+                logger.error(f"⚠️ 托管机器人 {bot_username} 未运行，无法发送人工验证通知")
                 await update.message.reply_text(
                     "❌ 系统暂时无法处理验证申请。\n请稍后再试或联系管理员。",
                     parse_mode="HTML"
@@ -582,16 +582,16 @@ async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ]
             
-            # 4. 发送通知给 owner
+            # 4. 由托管机器人发送通知给它的 owner
             try:
-                logger.info(f"✅ 准备发送人工验证通知给 owner_id={owner_id}")
-                await manager_app.bot.send_message(
+                logger.info(f"✅ 准备通过 {bot_username} 发送人工验证通知给 owner_id={owner_id}")
+                await hosted_app.bot.send_message(
                     chat_id=owner_id,
                     text=admin_text,
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
-                logger.info(f"✅ 人工验证通知已发送给 owner_id={owner_id}")
+                logger.info(f"✅ 人工验证通知已通过 {bot_username} 发送给 owner_id={owner_id}")
                 
                 # ✅ 只有成功发送通知后，才记录状态
                 db.add_pending_verification(bot_username, user_id, "MANUAL_PENDING")
@@ -1078,6 +1078,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                     else:
                          await message.reply_text("❌ 生成验证链接失败，请稍后重试或联系管理员")
                     
+                    return
+                
+                # 如果是人工验证模式
+                elif verification_type == 'manual':
+                    # 检查是否已有待审核的申请
+                    pending_status = db.get_pending_verification(bot_username, user_id)
+                    
+                    if pending_status == "MANUAL_PENDING":
+                        # 已经提交过申请，提示等待
+                        await message.reply_text("⏳ 您的验证申请正在审核中，请耐心等待管理员处理。")
+                    else:
+                        # 提示用户发送 /start 申请验证
+                        await message.reply_text(
+                            "🔐 <b>人工验证</b>\n\n"
+                            "欢迎使用本机器人！\n"
+                            "为确保安全，首次使用需要管理员人工审核。\n\n"
+                            "📝 请发送 /start 提交验证申请",
+                            parse_mode="HTML"
+                        )
                     return
 
                 # 简单验证码模式：检查是否有待验证的验证码（优先从数据库读取）
