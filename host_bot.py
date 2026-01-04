@@ -593,7 +593,6 @@ async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🆔 ID: <code>{user_id}</code>\n"
                 f"🤖 Bot: @{bot_username}\n"
                 f"⏰ {now_str}\n\n"
-                "是否通过？"
             )
             
             keyboard = [
@@ -2819,6 +2818,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📝 验证方式说明：\n\n"
             f"🔹 简单验证码\n"
             f"• 数学题、逻辑题等\n"
+            f"• 支持自定义问答\n"
             f"• 轻量快速\n\n"
             f"🔹 Cloudflare 验证\n"
             f"• 人机验证\n"
