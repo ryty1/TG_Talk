@@ -12,6 +12,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters
 )
+from telegram.request import HTTPXRequest
 from telegram.error import BadRequest
 from dotenv import load_dotenv
 load_dotenv()
@@ -30,6 +31,15 @@ running_apps = {}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# ================== 网络配置 ==================
+# 增加超时时间以应对网络不通畅导致的 httpx.ReadError
+request_config = HTTPXRequest(
+    connect_timeout=20.0,
+    read_timeout=20.0,
+    write_timeout=20.0,
+    pool_timeout=20.0
+)
 
 # ================== 工具函数 ==================
 def load_bots():
@@ -1865,7 +1875,7 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["waiting_token"] = False
 
     try:
-        tmp_app = Application.builder().token(token).build()
+        tmp_app = Application.builder().token(token).request(request_config).build()
         bot_info = await tmp_app.bot.get_me()
         bot_username = bot_info.username
     except Exception:
@@ -1900,7 +1910,7 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trigger_backup(silent=True)
 
     # 启动子 Bot
-    new_app = Application.builder().token(token).build()
+    new_app = Application.builder().token(token).request(request_config).build()
     new_app.add_handler(CommandHandler("start", subbot_start))
     # 处理普通消息
     new_app.add_handler(MessageHandler(filters.ALL, partial(handle_message, owner_id=int(owner_id), bot_username=bot_username)))
@@ -3192,7 +3202,7 @@ async def run_all_bots():
         for b in info.get("bots", []):
             token = b["token"]; bot_username = b["bot_username"]
             try:
-                app = Application.builder().token(token).build()
+                app = Application.builder().token(token).request(request_config).build()
                 app.add_handler(CommandHandler("start", subbot_start))
                 # 处理普通消息
                 app.add_handler(MessageHandler(filters.ALL, partial(handle_message, owner_id=int(owner_id), bot_username=bot_username)))
@@ -3234,7 +3244,7 @@ async def run_all_bots():
                 logger.error(f"子Bot启动失败: @{bot_username} {e}")
 
     # 管理 Bot
-    manager_app = Application.builder().token(MANAGER_TOKEN).build()
+    manager_app = Application.builder().token(MANAGER_TOKEN).request(request_config).build()
     manager_app.add_handler(CommandHandler("start", manager_start))
     # 添加欢迎语设置相关的命令处理器
     async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
