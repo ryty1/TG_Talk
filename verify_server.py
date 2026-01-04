@@ -191,7 +191,15 @@ def send_welcome_and_notify(bot_username: str, user_id: int, user_name: str, use
     # 发送消息
     try:
         async def send_messages():
-            bot = Bot(token=bot_info['token'])
+            from telegram.request import HTTPXRequest
+            # 增加超时时间以应对网络不通畅
+            request_config = HTTPXRequest(
+                connect_timeout=20.0,
+                read_timeout=20.0,
+                write_timeout=20.0,
+                pool_timeout=20.0
+            )
+            bot = Bot(token=bot_info['token'], request=request_config)
             
             # 1. 删除验证消息（如果有 message_id）
             if token_info.get('message_id'):
