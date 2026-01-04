@@ -1452,7 +1452,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
                 except BadRequest as e:
                     low = str(e).lower()
-                    if ("message thread not found" in low) or ("topic not found" in low):
+                    if ("message thread not found" in low) or ("topic not found" in low) or ("topic_deleted" in low):
                         try:
                             display_name = (
                                 message.from_user.full_name
