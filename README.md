@@ -34,7 +34,7 @@ docker-compose up -d
 
 ```bash
 # 一键安装/卸载（安装后默认开启自启后台运行）
-bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/main/setup.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/v1.0.4/setup.sh)
 ```
 
 **适用场景：** Linux 服务器环境，需要直接控制系统服务
