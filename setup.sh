@@ -5,15 +5,15 @@ APP_DIR="/opt/tg_multi_bot"
 SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="tg_multi_bot"
 SCRIPT_NAME="host_bot.py"
-SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/host_bot.py"
-DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/database.py"
+SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.4/host_bot.py"
+DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.4/database.py"
 VERIFY_SCRIPT_NAME="verify_server.py"
 VERIFY_SERVICE_NAME="tg_verify_server"
-VERIFY_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/verify_server.py"
-BACKUP_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/backup.sh"
-RESTORE_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/restore.sh"
+VERIFY_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.4/verify_server.py"
+BACKUP_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.4/backup.sh"
+RESTORE_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.4/restore.sh"
 # 模板文件基础URL (假设在 templates 目录下)
-TEMPLATES_BASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/templates"
+TEMPLATES_BASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.4/templates"
 
 function check_and_install() {
   PKG=$1
