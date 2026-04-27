@@ -220,6 +220,15 @@ Bot: ✅ 已将用户 111111 从黑名单移除
 | 查看日志 | `journalctl -u tg_multi_bot -f` |
 | 关闭自启 | `systemctl disable tg_multi_bot` |
 
+| 功能 | 命令 |
+|------|------|
+| 验证服务 | `systemctl start tg_verify_server` |
+| 停止服务 | `systemctl stop tg_verify_server` |
+| 重启服务 | `systemctl restart tg_verify_server` |
+| 查看状态 | `systemctl status tg_verify_server` |
+| 查看日志 | `journalctl -u tg_verify_server -f` |
+
+
 ## 📂 文件结构
 
 ### Docker 部署
