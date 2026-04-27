@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/tg_multi_bot/venv/bin/python
 import os
 import logging
 import asyncio
@@ -12,6 +12,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters
 )
+from telegram.request import HTTPXRequest
 from telegram.error import BadRequest
 from dotenv import load_dotenv
 load_dotenv()
@@ -31,6 +32,28 @@ running_apps = {}
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# ================== 网络配置 ==================
+def build_request_config(connection_pool_size: int = 20) -> HTTPXRequest:
+    """为每个 Application 创建独立 HTTPXRequest，避免跨 Bot 共享连接池。"""
+    return HTTPXRequest(
+        connection_pool_size=connection_pool_size,
+        connect_timeout=60.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=60.0,
+    )
+
+
+def build_application(token: str) -> Application:
+    """构建 Telegram Application（独立请求客户端）。"""
+    return (
+        Application.builder()
+        .token(token)
+        .request(build_request_config(connection_pool_size=20))
+        .get_updates_request(build_request_config(connection_pool_size=2))
+        .build()
+    )
+
 # ================== 工具函数 ==================
 def load_bots():
     """从数据库加载 Bot 配置"""
@@ -47,8 +70,14 @@ def load_bots():
             "token": bot_info['token'],
             "welcome_msg": bot_info.get('welcome_msg', ''),
             "mode": bot_info.get('mode', 'direct'),
-            "forum_group_id": bot_info.get('forum_group_id')
+            "forum_group_id": bot_info.get('forum_group_id'),
+            "verification_type": bot_info.get('verification_type', 'simple'),
+            "custom_captcha_question": bot_info.get('custom_captcha_question'),
+            "custom_captcha_answer": bot_info.get('custom_captcha_answer'),
+            "custom_captcha_hint": bot_info.get('custom_captcha_hint')
         })
+
+
     
     logger.info(f"✅ 从数据库加载了 {len(all_bots)} 个 Bot")
     return bots_data
@@ -86,14 +115,13 @@ def save_map():
 
 def trigger_backup(silent=False):
     """触发自动备份（异步执行，不阻塞主进程）
-
+    
     Args:
         silent: 是否静默备份（不推送通知）
     """
     import subprocess
-    # 使用环境变量配置备份脚本路径，Docker环境下默认使用相对路径
-    backup_script = os.environ.get('BACKUP_SCRIPT_PATH', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backup.sh'))
-
+    backup_script = "/opt/tg_multi_bot/backup.sh"
+    
     # 检查备份脚本是否存在
     if not os.path.exists(backup_script):
         logger.info("⏭️  备份脚本不存在，跳过自动备份")
@@ -344,8 +372,7 @@ def ensure_bot_map(bot_username: str):
 async def reply_and_auto_delete(message, text, delay=5, **kwargs):
     try:
         sent = await message.reply_text(text, **kwargs)
-        await asyncio.sleep(delay)
-        await sent.delete()
+        asyncio.create_task(_delete_later(sent, delay))
     except Exception:
         pass
 
@@ -353,8 +380,16 @@ async def send_and_auto_delete(context, chat_id, text, delay=5, **kwargs):
     """发送消息并自动删除(不使用reply)"""
     try:
         sent = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        asyncio.create_task(_delete_later(sent, delay))
+    except Exception:
+        pass
+
+
+async def _delete_later(message, delay: int):
+    """后台延迟删除消息，避免阻塞当前 update 处理。"""
+    try:
         await asyncio.sleep(delay)
-        await sent.delete()
+        await message.delete()
     except Exception:
         pass
 
@@ -456,73 +491,281 @@ async def subbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     bot_username = context.bot.username
     
+    # 获取 Bot 主人 (Owner)
+    owner_id = get_bot_owner(bot_username)
+    
+    # 如果是主人发送 /start，显示管理指令说明
+    if user_id == owner_id:
+        instructions = (
+            "🤖 <b>机器人指令使用说明</b>\n\n"
+            "• /start - 显示本使用说明\n"
+            "• /id - 可查看该用户的详细信息\n"
+            "• /b - 可将该用户加入黑名单\n"
+            "• /ub - 解除黑名单\n"
+            "• /bl - 查看黑名单列表\n"
+            "• /uv - 取消该用户的已验证状态\n\n"
+            "💡 <b>温馨提示：</b>\n"
+            "1. 只有第三方用户发送消息才会触发验证。\n"
+            "2. 您无需验证即可直接使用机器人管理功能。\n"
+            "3. 私聊直连模式 需回复用户发送命令，话题模式 直接 发送命令 即可。"
+        )
+        await update.message.reply_text(instructions, parse_mode="HTML")
+        return
+
     # 如果用户已验证，显示欢迎信息
     if is_verified(bot_username, user_id):
         # 使用优先级欢迎语：用户自定义 > 管理员全局 > 系统默认
         welcome_msg = get_welcome_message(bot_username)
         await update.message.reply_text(welcome_msg)
     else:
-        # 生成验证码并发送
-        captcha_data = generate_captcha()
-        # 💾 保存到数据库（持久化）
-        db.add_pending_verification(bot_username, user_id, captcha_data['answer'])
-        # 内存中也保留（用于快速访问）
-        verification_key = f"{bot_username}_{user_id}"
-        pending_verifications[verification_key] = captcha_data['answer']
+        # 获取 Bot 配置以确定验证类型（直接从数据库读取，确保是最新的）
+        bot_info = db.get_bot(bot_username)
+        verification_type = bot_info.get('verification_type', 'simple') if bot_info else 'simple'
         
-        # 根据验证码类型构建消息
-        captcha_type = captcha_data['type']
+        if verification_type == 'cf':
+
+            # CF Turnstile 验证流程
+            user_name = update.message.from_user.full_name or "匿名用户"
+            user_username = update.message.from_user.username or ""
+            
+            # 发送验证消息（带按钮）
+            message_text = (
+                "🔐 <b>Cloudflare 验证</b>\n\n"
+                "欢迎使用本机器人！\n"
+                "为确保安全，首次使用需要完成验证。\n\n"
+                "📝 请点击下方按钮完成验证：\n\n"
+                "⏰ 验证链接有效期：<b>5分钟</b>\n"
+                "🔗 验证完成后，返回此处继续使用"
+            )
+            
+            # 先发送消息，获取 message_id
+            sent_message = await update.message.reply_text(
+                message_text,
+                parse_mode="HTML"
+            )
+            
+            # 创建验证令牌（保存 message_id）
+            token = db.create_verification_token(bot_username, user_id, user_name, user_username, sent_message.message_id)
+            
+            if not token:
+                await update.message.reply_text("❌ 生成验证链接失败，请稍后重试或联系管理员")
+                return
+            
+            # 构建验证 URL
+            verify_url = f"{os.environ.get('VERIFY_SERVER_URL', 'http://localhost:5000')}/verify/{token}"
+            
+            # 编辑消息添加按钮
+            keyboard = [
+                [InlineKeyboardButton("🔗 点击验证", url=verify_url)]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await sent_message.edit_text(
+                message_text,
+                parse_mode="HTML",
+                reply_markup=reply_markup
+            )
         
-        if captcha_type == 'math':
-            message_text = (
-                f"🔐 数学验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 请计算：<b>{captcha_data['question']}</b>\n\n"
-                f"💡 提示：请输入计算结果（纯数字）"
+        elif verification_type == 'manual':
+            # 人工验证流程
+            
+            # 1. 检查是否在黑名单（已拒绝用户）
+            if is_blacklisted(bot_username, user_id):
+                 await update.message.reply_text("🚫 您的验证申请已被拒绝，无法再次申请。")
+                 return
+
+            # 2. 检查是否有待处理的申请
+            # 这里的 pending_verifications 用 "MANUAL_PENDING" 作为标记
+            verification_key = f"{bot_username}_{user_id}"
+            pending_status = db.get_pending_verification(bot_username, user_id)
+            
+            if pending_status == "MANUAL_PENDING":
+                 await update.message.reply_text("⏳ 您的验证申请正在审核中，请耐心等待管理员处理。")
+                 return
+
+            # 3. 准备申请信息
+            # 获取用户信息
+            user_name = update.message.from_user.full_name or "匿名用户"
+            user_username = update.message.from_user.username or ""
+            user_id_str = str(user_id)
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            
+            # 获取 Bot 主人 (Owner)
+            owner_id = get_bot_owner(bot_username)
+            
+            # 🐛 调试日志
+            logger.info(f"🔍 人工验证：bot={bot_username}, user={user_id}, owner_id={owner_id}")
+            logger.info(f"🔍 running_apps keys: {list(running_apps.keys())}")
+            
+            if not owner_id:
+                logger.error(f"❌ 未找到 bot {bot_username} 的 owner_id")
+                await update.message.reply_text(
+                    "❌ 系统配置错误，无法提交验证申请。\n请联系管理员。",
+                    parse_mode="HTML"
+                )
+                return
+            
+            # 检查托管机器人是否运行
+            hosted_app = running_apps.get(bot_username)
+            if not hosted_app:
+                logger.error(f"⚠️ 托管机器人 {bot_username} 未运行，无法发送人工验证通知")
+                await update.message.reply_text(
+                    "❌ 系统暂时无法处理验证申请。\n请稍后再试或联系管理员。",
+                    parse_mode="HTML"
+                )
+                return
+            
+            # 准备通知内容
+            admin_text = (
+                "🟠 <b>新用户验证（人工）</b>\n\n"
+                f"👤 昵称: {user_name}\n"
+                f"📱 用户名: @{user_username if user_username else '无'}\n"
+                f"🆔 ID: <code>{user_id}</code>\n"
+                f"🤖 Bot: @{bot_username}\n"
+                f"⏰ {now_str}\n\n"
             )
-        elif captcha_type == 'sequence':
-            message_text = (
-                f"🔐 逻辑验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 {captcha_data['question']}\n\n"
-                f"💡 提示：观察规律，填入下一个数字"
-            )
-        elif captcha_type == 'chinese':
-            message_text = (
-                f"🔐 中文数字验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 中文数字：<b>{captcha_data['display']}</b>\n\n"
-                f"💡 {captcha_data['question']}"
-            )
-        elif captcha_type == 'logic':
-            message_text = (
-                f"🔐 智力验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 {captcha_data['question']}\n\n"
-                f"💡 提示：简单的逻辑题，输入数字答案"
-            )
-        elif captcha_type == 'time':
-            message_text = (
-                f"🔐 时间验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 时间：<b>{captcha_data['display']}</b>\n\n"
-                f"💡 {captcha_data['question']}"
-            )
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("通过", callback_data=f"manual_approve_{bot_username}_{user_id}"),
+                    InlineKeyboardButton("拒绝", callback_data=f"manual_reject_{bot_username}_{user_id}")
+                ]
+            ]
+            
+            # 4. 由托管机器人发送通知给它的 owner
+            try:
+                logger.info(f"✅ 准备通过 {bot_username} 发送人工验证通知给 owner_id={owner_id}")
+                await hosted_app.bot.send_message(
+                    chat_id=owner_id,
+                    text=admin_text,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                logger.info(f"✅ 人工验证通知已通过 {bot_username} 发送给 owner_id={owner_id}")
+                
+                # ✅ 只有成功发送通知后，才记录状态
+                db.add_pending_verification(bot_username, user_id, "MANUAL_PENDING")
+                pending_verifications[verification_key] = "MANUAL_PENDING"
+                
+                # 发送给用户确认
+                await update.message.reply_text(
+                    "📝 <b>已提交验证申请</b>\n\n"
+                    "您的申请正在等待管理员人工审核。\n"
+                    "审核通过后，您将收到通知。",
+                    parse_mode="HTML"
+                )
+                
+            except Exception as e:
+                logger.error(f"❌ 发送人工验证通知失败: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
+                # 通知用户失败
+                await update.message.reply_text(
+                    "❌ 提交验证申请失败，请稍后再试。\n"
+                    "如果问题持续，请联系管理员。",
+                    parse_mode="HTML"
+                )
+
         else:
-            message_text = (
-                f"🔐 验证\n\n"
-                f"欢迎使用本机器人！\n"
-                f"为防止滥用，首次使用需要验证。\n\n"
-                f"📝 {captcha_data['question']}\n\n"
-                f"💡 提示：请输入答案"
-            )
-        
-        await update.message.reply_text(message_text, parse_mode="HTML")
+            # 简单验证码流程（原有逻辑）
+            
+            # 优先检查是否有自定义验证
+            custom_q = bot_info.get('custom_captcha_question')
+            custom_a = bot_info.get('custom_captcha_answer')
+            custom_h = bot_info.get('custom_captcha_hint')  # 获取提示
+            
+            if custom_q and custom_a:
+                # 使用自定义验证
+                captcha_data = {
+                    'type': 'custom',
+                    'question': custom_q,
+                    'answer': custom_a,
+                    'hint': custom_h  # 保存提示
+                }
+            else:
+                # 使用系统生成的验证码
+                captcha_data = generate_captcha()
+            
+            # 💾 保存到数据库（持久化）
+            db.add_pending_verification(bot_username, user_id, captcha_data['answer'])
+            # 内存中也保留（用于快速访问）
+            verification_key = f"{bot_username}_{user_id}"
+            pending_verifications[verification_key] = captcha_data['answer']
+            
+            # 根据验证码类型构建消息
+            captcha_type = captcha_data['type']
+            
+            if captcha_type == 'custom':
+                 # 构建自定义验证消息
+                 message_text = (
+                    f"🔐 验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 问题：<b>{captcha_data['question']}</b>\n"
+                )
+                 
+                 # 如果有提示，添加提示
+                 if captcha_data.get('hint'):
+                     message_text += f"💡 提示：{captcha_data['hint']}\n"
+                 
+                 message_text += f"\n请输入答案："
+            elif captcha_type == 'math':
+                message_text = (
+                    f"🔐 数学验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 请计算：<b>{captcha_data['question']}</b>\n\n"
+                    f"💡 提示：请输入计算结果（纯数字）"
+                )
+            elif captcha_type == 'sequence':
+                message_text = (
+                    f"🔐 逻辑验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 {captcha_data['question']}\n\n"
+                    f"💡 提示：观察规律，填入下一个数字"
+                )
+            elif captcha_type == 'chinese':
+                message_text = (
+                    f"🔐 中文数字验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 中文数字：<b>{captcha_data['display']}</b>\n\n"
+                    f"💡 {captcha_data['question']}"
+                )
+            elif captcha_type == 'logic':
+                message_text = (
+                    f"🔐 智力验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 {captcha_data['question']}\n\n"
+                    f"💡 提示：简单的逻辑题，输入数字答案"
+                )
+            elif captcha_type == 'time':
+                message_text = (
+                    f"🔐 时间验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 时间：<b>{captcha_data['display']}</b>\n\n"
+                    f"💡 {captcha_data['question']}"
+                )
+            else:
+                message_text = (
+                    f"🔐 验证\n\n"
+                    f"欢迎使用本机器人！\n"
+                    f"为防止滥用，首次使用需要验证。\n\n"
+                    f"📝 {captcha_data['question']}\n\n"
+                    f"💡 提示：请输入答案"
+                )
+            
+            await update.message.reply_text(message_text, parse_mode="HTML")
+
+def get_bot_owner(bot_username: str) -> int:
+    """获取 Bot 的 owner ID"""
+    bot_info = db.get_bot(bot_username)
+    return bot_info['owner'] if bot_info else 0
+
 
 # ================== 消息转发逻辑（直连/话题 可切换） ==================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, owner_id: int, bot_username: str):
@@ -724,6 +967,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
             if target_user:
                 if remove_verified_user(bot_username, target_user):
+                    # 清除该用户的待验证状态（内存和数据库）
+                    verification_key = f"{bot_username}_{target_user}"
+                    if verification_key in pending_verifications:
+                        del pending_verifications[verification_key]
+                    db.remove_pending_verification(bot_username, target_user)
+                    
                     await message.reply_text(f"🔓 已取消用户 {target_user} 的验证\n下次发送消息时需要重新验证")
                     
                     # 通知到管理频道 - 获取用户信息
@@ -838,7 +1087,69 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
             
             # 如果用户未验证
             if not is_verified(bot_username, user_id):
-                # 检查是否有待验证的验证码（优先从数据库读取）
+                # 获取 Bot 配置以确定验证类型
+                bot_info = db.get_bot(bot_username)
+                verification_type = bot_info.get('verification_type', 'simple') if bot_info else 'simple'
+                
+                # 如果是 CF 验证模式
+                if verification_type == 'cf':
+                    # CF 模式下，用户发送任何文本（除了命令）都视为未验证，直接提示验证
+                    # 创建验证令牌
+                    user_name = message.from_user.full_name or "匿名用户"
+                    user_username = message.from_user.username or ""
+                    
+                    # 发送验证消息（带按钮）
+                    message_text = (
+                        "🔐 <b>Cloudflare 验证</b>\n\n"
+                        "欢迎使用本机器人！\n"
+                        "为确保安全，首次使用需要完成验证。\n\n"
+                        "📝 请点击下方按钮完成验证：\n\n"
+                        "⏰ 验证链接有效期：<b>5分钟</b>\n"
+                        "🔗 验证完成后，返回此处继续使用"
+                    )
+                    
+                    sent_message = await message.reply_text(
+                        message_text,
+                        parse_mode="HTML"
+                    )
+                    
+                    token = db.create_verification_token(bot_username, user_id, user_name, user_username, sent_message.message_id)
+                    
+                    if token:
+                        verify_url = f"{os.environ.get('VERIFY_SERVER_URL', 'http://localhost:5000')}/verify/{token}"
+                        keyboard = [[InlineKeyboardButton("🔗 点击验证", url=verify_url)]]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        
+                        await sent_message.edit_text(
+                            message_text,
+                            parse_mode="HTML",
+                            reply_markup=reply_markup
+                        )
+                    else:
+                         await message.reply_text("❌ 生成验证链接失败，请稍后重试或联系管理员")
+                    
+                    return
+                
+                # 如果是人工验证模式
+                elif verification_type == 'manual':
+                    # 检查是否已有待审核的申请
+                    pending_status = db.get_pending_verification(bot_username, user_id)
+                    
+                    if pending_status == "MANUAL_PENDING":
+                        # 已经提交过申请，提示等待
+                        await message.reply_text("⏳ 您的验证申请正在审核中，请耐心等待管理员处理。")
+                    else:
+                        # 提示用户发送 /start 申请验证
+                        await message.reply_text(
+                            "🔐 <b>人工验证</b>\n\n"
+                            "欢迎使用本机器人！\n"
+                            "为确保安全，首次使用需要管理员人工审核。\n\n"
+                            "📝 请发送 /start 提交验证申请",
+                            parse_mode="HTML"
+                        )
+                    return
+
+                # 简单验证码模式：检查是否有待验证的验证码（优先从数据库读取）
                 expected_captcha = db.get_pending_verification(bot_username, user_id)
                 
                 # 如果数据库中没有，检查内存
@@ -1096,7 +1407,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                 topic_id = topics.get(uid_key)
                 user_msg_key = f"{chat_id}_{message.message_id}"
 
-                # 若无映射，先创建话题
+                # 若无映射，先尝试从数据库单独获取（双重保险）
+                if not topic_id:
+                    existing_topic = db.get_mapping(bot_username, "topic", uid_key)
+                    if existing_topic and existing_topic.isdigit():
+                        topic_id = int(existing_topic)
+                        topics[uid_key] = topic_id  # 回写内存
+                        logger.info(f"[话题模式] 从数据库恢复了话题映射: user {chat_id} -> topic {topic_id}")
+
+                # 若仍无映射，才创建新话题
                 if not topic_id:
                     display_name = (
                         message.from_user.full_name
@@ -1183,7 +1502,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
 
                 except BadRequest as e:
                     low = str(e).lower()
-                    if ("message thread not found" in low) or ("topic not found" in low):
+                    if ("message thread not found" in low) or ("topic not found" in low) or ("topic_deleted" in low):
                         try:
                             display_name = (
                                 message.from_user.full_name
@@ -1243,8 +1562,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, own
                                         # 话题模式下主人在群里编辑，给一个简单的反馈(不使用reply_and_auto_delete，因为可能没有reply_to_message)
                                         try:
                                             sent = await message.reply_text("✅ 编辑同步成功")
-                                            await asyncio.sleep(2)
-                                            await sent.delete()
+                                            asyncio.create_task(_delete_later(sent, 2))
                                         except:
                                             pass
                                     else:
@@ -1358,9 +1676,93 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"成功: {success_count}/{len(all_owners)}\n"
             f"时间: {now}"
         )
-        
-        return
+        return  # 广播完成后返回
     
+    # ----- 等待设置自定义问题 -----
+    state = context.user_data.get('state')
+    setting_bot = context.user_data.get('setting_bot')
+    
+    if state == 'waiting_custom_question' and setting_bot:
+        if update.message and update.message.text:
+            question = update.message.text.strip()
+            context.user_data['custom_question'] = question
+            context.user_data['state'] = 'waiting_custom_answer'
+            
+            await update.message.reply_text(
+                f"✅ 问题已记录：\n"
+                f"<b>{question}</b>\n\n"
+                f"接下来，请输入该问题的<b>答案</b>：",
+                parse_mode="HTML"
+            )
+            return
+
+    # ----- 等待设置自定义答案 -----
+    if state == 'waiting_custom_answer' and setting_bot:
+        if update.message and update.message.text:
+            answer = update.message.text.strip()
+            question = context.user_data.get('custom_question')
+            
+            # 保存答案到临时状态
+            context.user_data['custom_answer'] = answer
+            context.user_data['state'] = 'waiting_custom_hint_choice'
+            
+            # 询问是否添加答案提示
+            keyboard = [
+                [InlineKeyboardButton("✅ 是，添加提示", callback_data=f"custom_hint_yes_{setting_bot}")],
+                [InlineKeyboardButton("❌ 否，不需要", callback_data=f"custom_hint_no_{setting_bot}")]
+            ]
+            
+            await update.message.reply_text(
+                f"✅ <b>答案已记录</b>\n\n"
+                f"📝 问题: {question}\n"
+                f"🔑 答案: {answer}\n\n"
+                f"━━━━━━━━━━━━━━\n\n"
+                f"💡 <b>是否添加答案提示？</b>\n\n"
+                f"答案提示会在验证问题下方显示，帮助用户理解如何作答。\n\n"
+                f"例如：「提示：请输入数字」",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+    
+    # ----- 等待输入提示内容 -----
+    if state == 'waiting_custom_hint_input' and setting_bot:
+        if update.message and update.message.text:
+            hint = update.message.text.strip()
+            question = context.user_data.get('custom_question')
+            answer = context.user_data.get('custom_answer')
+            
+            # 更新数据库（包含提示）
+            if db.update_bot_custom_captcha(setting_bot, question, answer, hint):
+                # 更新内存
+                owner_id = str(update.message.from_user.id)
+                bots = bots_data.get(owner_id, {}).get("bots", [])
+                for b in bots:
+                    if b["bot_username"] == setting_bot:
+                        b['custom_captcha_question'] = question
+                        b['custom_captcha_answer'] = answer
+                        b['custom_captcha_hint'] = hint
+                        break
+                
+                await update.message.reply_text(
+                    f"✅ <b>设置成功！</b>\n\n"
+                    f"🤖 Bot: @{setting_bot}\n"
+                    f"📝 问题: {question}\n"
+                    f"🔑 答案: {answer}\n"
+                    f"💡 提示: {hint}\n\n"
+                    f"现在新用户将会看到此验证问题。",
+                    parse_mode="HTML"
+                )
+            else:
+                 await update.message.reply_text("❌ 设置失败，请稍后重试")
+            
+            # 清理状态
+            context.user_data.pop('state', None)
+            context.user_data.pop('setting_bot', None)
+            context.user_data.pop('custom_question', None)
+            context.user_data.pop('custom_answer', None)
+            return
+
     # ----- 等待设置欢迎语 -----
     action = context.user_data.get("action")
     
@@ -1492,7 +1894,7 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["waiting_token"] = False
 
     try:
-        tmp_app = Application.builder().token(token).build()
+        tmp_app = build_application(token)
         bot_info = await tmp_app.bot.get_me()
         bot_username = bot_info.username
     except Exception:
@@ -1527,7 +1929,7 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trigger_backup(silent=True)
 
     # 启动子 Bot
-    new_app = Application.builder().token(token).build()
+    new_app = build_application(token)
     new_app.add_handler(CommandHandler("start", subbot_start))
     # 处理普通消息
     new_app.add_handler(MessageHandler(filters.ALL, partial(handle_message, owner_id=int(owner_id), bot_username=bot_username)))
@@ -1585,6 +1987,96 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await send_admin_log(log_text)
 
+# ================== 辅助函数 ==================
+async def show_verify_settings(query, bot_username, current_type):
+    """显示验证设置菜单"""
+    keyboard = [
+        [InlineKeyboardButton(
+            f"{'✅ ' if current_type == 'simple' else ''}简单验证码", 
+            callback_data=f"verify_simple_{bot_username}"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅ ' if current_type == 'cf' else ''}Cloudflare 验证", 
+            callback_data=f"verify_cf_{bot_username}"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅ ' if current_type == 'manual' else ''}人工验证", 
+            callback_data=f"verify_manual_{bot_username}"
+        )],
+        [InlineKeyboardButton("🔙 返回", callback_data=f"info_{bot_username}")]
+    ]
+    
+    # 仅在简单验证模式下显示"设置/清除自定义问答"
+    if current_type == 'simple':
+        # 检查是否已设置
+        owner_id = str(query.from_user.id)
+        bots = bots_data.get(owner_id, {}).get("bots", [])
+        target_bot = next((b for b in bots if b["bot_username"] == bot_username), None)
+        
+        has_custom = False
+        if target_bot:
+             if target_bot.get('custom_captcha_question') and target_bot.get('custom_captcha_answer'):
+                 has_custom = True
+        
+        if has_custom:
+            # 已设置自定义问答：显示"清除自定义问答"按钮
+            keyboard.insert(3, [InlineKeyboardButton("🗑️ 清除自定义问答", callback_data=f"clear_custom_captcha_{bot_username}")])
+        else:
+            # 未设置：显示"设置自定义问答"按钮
+            keyboard.insert(3, [InlineKeyboardButton("📝 设置自定义问答", callback_data=f"set_custom_captcha_{bot_username}")])
+
+    if current_type == 'simple':
+        verify_type_label = "简单验证码"
+    elif current_type == 'cf':
+        verify_type_label = "Cloudflare 验证"
+    else:
+        verify_type_label = "人工验证"
+    
+    # 构建信息文本
+    info_text = (
+        f"🔐 验证设置 - @{bot_username}\n\n"
+        f"当前验证方式: {verify_type_label}\n\n"
+    )
+    
+    # 如果是简单验证且已设置自定义问答，显示详情
+    if current_type == 'simple':
+        owner_id = str(query.from_user.id)
+        bots = bots_data.get(owner_id, {}).get("bots", [])
+        target_bot = next((b for b in bots if b["bot_username"] == bot_username), None)
+        
+        if target_bot and target_bot.get('custom_captcha_question') and target_bot.get('custom_captcha_answer'):
+            info_text += (
+                f"📋 当前自定义验证：\n"
+                f"❓ 问题：{target_bot.get('custom_captcha_question')}\n"
+                f"✅ 答案：{target_bot.get('custom_captcha_answer')}\n"
+            )
+            if target_bot.get('custom_captcha_hint'):
+                info_text += f"💡 提示：{target_bot.get('custom_captcha_hint')}\n"
+            info_text += "\n"
+    
+    info_text += (
+        f"━━━━━━━━━━━━━━\n"
+        f"📝 验证方式说明：\n\n"
+        f"🔹 简单验证码\n"
+        f"• 数学题、逻辑题等\n"
+        f"• 支持自定义问答\n"
+        f"• 轻量快速\n\n"
+        f"🔹 Cloudflare 验证\n"
+        f"• 人机验证\n"
+        f"• 更强的安全性\n\n"
+        f"🔹 人工验证\n"
+        f"• 管理员手动审核\n"
+        f"• 严格控制用户准入\n"
+        f"━━━━━━━━━━━━━━\n\n"
+        f"点击下方按钮切换验证方式："
+    )
+    
+    try:
+        await query.edit_message_text(text=info_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception:
+        # 如果内容没变，忽略错误
+        pass
+
 # ================== 菜单回调 ==================
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1597,6 +2089,239 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
     except Exception as e:
         logger.error(f"[回调] query.answer() 失败: {e}")
+        return
+
+    # ================== 自定义验证问答 ==================
+    if data.startswith("set_custom_captcha_"):
+        bot_username = data.split("_", 3)[3]
+        user_id = query.from_user.id
+        
+        # 鉴权
+        owner_id = get_bot_owner(bot_username)
+        if user_id != owner_id:
+             await query.answer("⚠️ 你没有权限操作", show_alert=True)
+             return
+             
+        # 设置状态
+        context.user_data['setting_bot'] = bot_username
+        context.user_data['state'] = 'waiting_custom_question'
+        
+        await query.message.reply_text(
+            f"📝 <b>设置自定义验证问题</b>\n\n"
+            f"当前 Bot: @{bot_username}\n\n"
+            f"请输入因为用户提问的问题：\n"
+            f"(例如：'1+1等于几？' 或 '进群暗号是什么？')",
+            parse_mode="HTML"
+        )
+        return
+        
+    if data.startswith("clear_custom_captcha_"):
+        # 修复：正确解析 bot_username
+        parts = data.split("_")
+        bot_username = "_".join(parts[3:])  # 支持 bot_username 中有下划线
+        user_id = query.from_user.id
+        
+        # 鉴权
+        owner_id = get_bot_owner(bot_username)
+        if user_id != owner_id:
+             await query.answer("⚠️ 你没有权限操作", show_alert=True)
+             return
+             
+        # 清除数据库（包括 hint）
+        if db.update_bot_custom_captcha(bot_username, None, None, None):
+            # 更新内存
+            bots = bots_data.get(str(owner_id), {}).get("bots", [])
+            for b in bots:
+                if b["bot_username"] == bot_username:
+                    b['custom_captcha_question'] = None
+                    b['custom_captcha_answer'] = None
+                    b['custom_captcha_hint'] = None
+                    break
+            
+            await query.answer("✅ 已清除自定义问答，将使用默认的简单验证问题", show_alert=True)
+            await show_verify_settings(query, bot_username, 'simple')
+        else:
+            await query.answer("❌ 清除失败", show_alert=True)
+        return
+    
+    # ================== 自定义验证提示选择 ==================
+    if data.startswith("custom_hint_yes_"):
+        bot_username = data.split("_", 3)[3]
+        user_id = query.from_user.id
+        
+        # 鉴权
+        owner_id = get_bot_owner(bot_username)
+        if user_id != owner_id:
+             await query.answer("⚠️ 你没有权限操作", show_alert=True)
+             return
+        
+        # 设置状态：等待输入提示
+        context.user_data['state'] = 'waiting_custom_hint_input'
+        
+        await query.message.reply_text(
+            f"💡 <b>请输入答案提示</b>\n\n"
+            f"提示会显示在验证问题下方，帮助用户理解如何作答。\n\n"
+            f"📝 示例提示：\n"
+            f"• 「提示：请输入数字」\n"
+            f"• 「提示：两个字」\n"
+            f"• 「提示：请用中文作答」\n\n"
+            f"请输入你的提示内容：",
+            parse_mode="HTML"
+        )
+        return
+    
+    if data.startswith("custom_hint_no_"):
+        bot_username = data.split("_", 3)[3]
+        user_id = query.from_user.id
+        
+        # 鉴权
+        owner_id = get_bot_owner(bot_username)
+        if user_id != owner_id:
+             await query.answer("⚠️ 你没有权限操作", show_alert=True)
+             return
+        
+        # 不添加提示，直接保存
+        question = context.user_data.get('custom_question')
+        answer = context.user_data.get('custom_answer')
+        
+        # 更新数据库（不含提示）
+        if db.update_bot_custom_captcha(bot_username, question, answer, None):
+            # 更新内存
+            bots = bots_data.get(str(owner_id), {}).get("bots", [])
+            for b in bots:
+                if b["bot_username"] == bot_username:
+                    b['custom_captcha_question'] = question
+                    b['custom_captcha_answer'] = answer
+                    b['custom_captcha_hint'] = None
+                    break
+            
+            await query.message.reply_text(
+                f"✅ <b>设置成功！</b>\n\n"
+                f"🤖 Bot: @{bot_username}\n"
+                f"📝 问题: {question}\n"
+                f"🔑 答案: {answer}\n\n"
+                f"现在新用户将会看到此验证问题。",
+                parse_mode="HTML"
+            )
+        else:
+             await query.message.reply_text("❌ 设置失败，请稍后重试")
+        
+        # 清理状态
+        context.user_data.pop('state', None)
+        context.user_data.pop('setting_bot', None)
+        context.user_data.pop('custom_question', None)
+        context.user_data.pop('custom_answer', None)
+        return
+
+    # ================== 人工验证审核 ==================
+    if data.startswith("manual_approve_") or data.startswith("manual_reject_"):
+        try:
+            # 修复：正确解析 callback_data
+            # 格式: manual_approve_botusername_userid 或 manual_reject_botusername_userid
+            # 例如: manual_approve_hgtf454_bot_645346292
+            
+            # 先去掉 action 前缀
+            if data.startswith("manual_approve_"):
+                action = "manual_approve"
+                remaining = data[len("manual_approve_"):]  # hgtf454_bot_645346292
+            else:
+                action = "manual_reject"
+                remaining = data[len("manual_reject_"):]   # hgtf454_bot_645346292
+            
+            # 从右边分割：最后一个 _ 后面是 user_id，前面是 bot_username
+            parts = remaining.rsplit("_", 1)  # ['hgtf454_bot', '645346292']
+            bot_username = parts[0]
+            user_id = int(parts[1])
+            
+            # 鉴权：只有 Owner 能点
+            owner_id = get_bot_owner(bot_username)
+            if query.from_user.id != owner_id:
+                await query.answer("⚠️ 你没有权限操作", show_alert=True)
+                return
+
+            # 获取用户信息（用于日志和通知）
+            try:
+                user_chat = await context.bot.get_chat(user_id)
+                user_name = user_chat.full_name or "未知用户"
+                user_username = f"@{user_chat.username}" if user_chat.username else "无用户名"
+            except:
+                user_name = "未知用户"
+                user_username = "未知"
+
+            if action == "manual_approve":
+                # 1. 添加到已验证
+                add_verified_user(bot_username, user_id, user_name, user_username)
+                
+                # 2. 清除待验证状态
+                verification_key = f"{bot_username}_{user_id}"
+                if verification_key in pending_verifications:
+                    del pending_verifications[verification_key]
+                db.remove_pending_verification(bot_username, user_id)
+                
+                # 3. 更新管理员的消息
+                await query.message.edit_reply_markup(reply_markup=None) # 移除按钮
+                current_text = query.message.text_html
+                await query.message.edit_text(
+                    f"{current_text}\n\n✅ <b>已通过</b> (操作人: {query.from_user.full_name})",
+                    parse_mode="HTML"
+                )
+                
+                # 4. 通知用户（使用托管机器人）
+                welcome_msg = get_welcome_message(bot_username)
+                try:
+                    # 修复：使用托管机器人发送消息给用户
+                    bot_app = running_apps.get(bot_username)
+                    if bot_app:
+                        await bot_app.bot.send_message(
+                            chat_id=user_id,
+                            text=f"✅ <b>验证通过！</b>\n\n{welcome_msg}",
+                            parse_mode="HTML"
+                        )
+                    else:
+                        logger.warning(f"托管机器人 {bot_username} 未运行，无法通知用户")
+                except Exception as e:
+                    logger.warning(f"通知用户 {user_id} 失败: {e}")
+                
+                await query.answer("已批准")
+
+            elif action == "manual_reject":
+                # 1. 拉黑用户
+                add_to_blacklist(bot_username, user_id, reason="人工验证拒绝")
+                
+                # 2. 清除待验证状态
+                verification_key = f"{bot_username}_{user_id}"
+                if verification_key in pending_verifications:
+                    del pending_verifications[verification_key]
+                db.remove_pending_verification(bot_username, user_id)
+                
+                # 3. 更新管理员的消息
+                await query.message.edit_reply_markup(reply_markup=None) # 移除按钮
+                current_text = query.message.text_html
+                await query.message.edit_text(
+                    f"{current_text}\n\n❌ <b>已拒绝</b> (操作人: {query.from_user.full_name})",
+                    parse_mode="HTML"
+                )
+                
+                # 4. 通知用户（使用托管机器人）
+                try:
+                    # 修复：使用托管机器人发送消息给用户
+                    bot_app = running_apps.get(bot_username)
+                    if bot_app:
+                        await bot_app.bot.send_message(
+                            chat_id=user_id,
+                            text="❌ <b>验证申请被拒绝</b>\n\n管理员审核未通过。您将无法使用此机器人。",
+                            parse_mode="HTML"
+                        )
+                    else:
+                        logger.warning(f"托管机器人 {bot_username} 未运行，无法通知用户")
+                except Exception as e:
+                    logger.warning(f"通知用户 {user_id} 失败: {e}")
+                
+                await query.answer("已拒绝")
+                
+        except Exception as e:
+            logger.error(f"处理人工验证回调失败: {e}")
+            await query.answer("处理失败", show_alert=True)
         return
 
     # ================== 管理员功能 ==================
@@ -2022,12 +2747,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("✏️ 设置欢迎语", callback_data=f"set_welcome_{bot_username}")],
             [InlineKeyboardButton("👁️ 预览欢迎语", callback_data=f"preview_welcome_{bot_username}")],
+            [InlineKeyboardButton("🔐 验证设置", callback_data=f"verify_settings_{bot_username}")],
             [InlineKeyboardButton("🛠 话题群ID", callback_data=f"setforum_{bot_username}")],
             [InlineKeyboardButton("🔁 私聊模式", callback_data=f"mode_direct_{bot_username}")],
             [InlineKeyboardButton("🔁 话题模式", callback_data=f"mode_forum_{bot_username}")],
             [InlineKeyboardButton("❌ 断开连接", callback_data=f"del_{bot_username}")],
             [InlineKeyboardButton("🔙 返回", callback_data="mybots")]
         ]
+
         await query.message.edit_text(info_text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
@@ -2072,7 +2799,196 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(f"✅ 已将 @{bot_username} 切换为 {mode_cn_full.split('模式')[0]} 模式。")
 
 
+    # ================== 验证设置管理 ==================
+    
+    # 验证设置菜单
+    if data.startswith("verify_settings_"):
+        bot_username = data.split("_", 2)[2]
+        owner_id = str(query.from_user.id)
+        
+        # 验证权限
+        bots = bots_data.get(owner_id, {}).get("bots", [])
+        target_bot = next((b for b in bots if b["bot_username"] == bot_username), None)
+        if not target_bot:
+            await reply_and_auto_delete(query.message, "⚠️ 找不到这个 Bot。", delay=10)
+            return
+        
+        # 获取当前验证类型
+        current_type = target_bot.get('verification_type', 'simple')
+        
+        # 构建菜单
+        keyboard = [
+            [InlineKeyboardButton(
+                f"{'✅ ' if current_type == 'simple' else ''}简单验证码", 
+                callback_data=f"verify_simple_{bot_username}"
+            )],
+            [InlineKeyboardButton(
+                f"{'✅ ' if current_type == 'cf' else ''}Cloudflare 验证", 
+                callback_data=f"verify_cf_{bot_username}"
+            )],
+            [InlineKeyboardButton(
+                f"{'✅ ' if current_type == 'manual' else ''}人工验证", 
+                callback_data=f"verify_manual_{bot_username}"
+            )],
+            [InlineKeyboardButton("🔙 返回", callback_data=f"info_{bot_username}")]
+        ]
+        
+        if current_type == 'simple':
+            verify_type_label = "简单验证码"
+        elif current_type == 'cf':
+            verify_type_label = "Cloudflare 验证"
+        else:
+            verify_type_label = "人工验证"
+        
+        info_text = (
+            f"🔐 验证设置 - @{bot_username}\n\n"
+            f"当前验证方式: {verify_type_label}\n\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"📝 验证方式说明：\n\n"
+            f"🔹 简单验证码\n"
+            f"• 数学题、逻辑题等\n"
+            f"• 支持自定义问答\n"
+            f"• 轻量快速\n\n"
+            f"🔹 Cloudflare 验证\n"
+            f"• 人机验证\n"
+            f"• 更强的安全性\n\n"
+            f"🔹 人工验证\n"
+            f"• 管理员手动审核\n"
+            f"• 严格控制用户准入\n"
+            f"━━━━━━━━━━━━━━\n\n"
+            f"点击下方按钮切换验证方式："
+        )
+        
+        await query.message.edit_text(info_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # 切换到简单验证
+    if data.startswith("verify_simple_"):
+        bot_username = data.split("_", 2)[2]
+        owner_id = str(query.from_user.id)
+        
+        # 验证权限
+        bots = bots_data.get(owner_id, {}).get("bots", [])
+        target_bot = next((b for b in bots if b["bot_username"] == bot_username), None)
+        if not target_bot:
+            await query.answer("⚠️ 找不到这个 Bot", show_alert=True)
+            return
+        
+        # 检查是否已经是简单验证
+        current_type = target_bot.get('verification_type', 'simple')
+        if current_type == 'simple':
+            await query.answer("ℹ️ 当前已经是简单验证码模式", show_alert=False)
+            return
+
+        
+        # 更新数据库
+        logger.info(f"🔄 切换验证模式: {bot_username} -> simple")
+        success = db.update_bot_verification_type(bot_username, 'simple')
+        
+        if success:
+            # 更新内存
+            target_bot['verification_type'] = 'simple'
+            logger.info(f"✅ 验证模式已更新: {bot_username} -> simple (DB + Memory)")
+            
+            await query.answer("✅ 已切换到简单验证码", show_alert=True)
+            
+            # 刷新菜单显示
+            await show_verify_settings(query, bot_username, 'simple')
+        else:
+            logger.error(f"❌ 数据库更新失败: {bot_username}")
+            await query.answer("❌ 切换失败，请重试", show_alert=True)
+        
+        return
+
+    
+    # 切换到 CF 验证
+    if data.startswith("verify_cf_"):
+        bot_username = data.split("_", 2)[2]
+        owner_id = str(query.from_user.id)
+        
+        # 鉴权
+        if str(query.from_user.id) != owner_id:
+            await query.answer("⚠️ 你没有权限管理这个 Bot", show_alert=True)
+            return
+
+        # 验证权限
+        bots = bots_data.get(owner_id, {}).get("bots", [])
+        target_bot = next((b for b in bots if b["bot_username"] == bot_username), None)
+        if not target_bot:
+            await query.answer("⚠️ 找不到这个 Bot", show_alert=True)
+            return
+        
+        # 检查是否已经是 CF 验证
+        current_type = target_bot.get('verification_type', 'simple')
+        if current_type == 'cf':
+            await query.answer("ℹ️ 当前已经是 Cloudflare 验证模式", show_alert=False)
+            return
+
+        
+        # 更新数据库
+        logger.info(f"🔄 切换验证模式: {bot_username} -> cf")
+        success = db.update_bot_verification_type(bot_username, 'cf')
+        
+        if success:
+            # 更新内存
+            target_bot['verification_type'] = 'cf'
+            logger.info(f"✅ 验证模式已更新: {bot_username} -> cf (DB + Memory)")
+            
+            await query.answer("✅ 已切换到 Cloudflare 验证", show_alert=True)
+            
+            # 刷新菜单显示
+            await show_verify_settings(query, bot_username, 'cf')
+        else:
+            logger.error(f"❌ 数据库更新失败: {bot_username}")
+            await query.answer("❌ 切换失败，请重试", show_alert=True)
+        
+        return
+
+    # 切换到 人工验证
+    if data.startswith("verify_manual_"):
+        bot_username = data.split("_", 2)[2]
+        owner_id = str(query.from_user.id)
+        
+        # 鉴权
+        if str(query.from_user.id) != owner_id:
+            await query.answer("⚠️ 你没有权限管理这个 Bot", show_alert=True)
+            return
+
+        # 验证权限
+        bots = bots_data.get(owner_id, {}).get("bots", [])
+        target_bot = next((b for b in bots if b["bot_username"] == bot_username), None)
+        if not target_bot:
+            await query.answer("⚠️ 找不到这个 Bot", show_alert=True)
+            return
+        
+        # 检查是否已经是人工验证
+        current_type = target_bot.get('verification_type', 'simple')
+        if current_type == 'manual':
+            await query.answer("ℹ️ 当前已经是人工验证模式", show_alert=False)
+            return
+
+        # 更新数据库
+        logger.info(f"🔄 切换验证模式: {bot_username} -> manual")
+        success = db.update_bot_verification_type(bot_username, 'manual')
+        
+        if success:
+            # 更新内存
+            target_bot['verification_type'] = 'manual'
+            logger.info(f"✅ 验证模式已更新: {bot_username} -> manual (DB + Memory)")
+            
+            await query.answer("✅ 已切换到人工验证", show_alert=True)
+            
+            # 刷新菜单显示
+            await show_verify_settings(query, bot_username, 'manual')
+        else:
+            logger.error(f"❌ 数据库更新失败: {bot_username}")
+            await query.answer("❌ 切换失败，请重试", show_alert=True)
+        
+        return
+
+
     if data.startswith("setforum_"):
+
         bot_username = data.split("_", 1)[1]
         context.user_data["waiting_forum_for"] = {"bot_username": bot_username}
         await query.message.reply_text(
@@ -2305,7 +3221,7 @@ async def run_all_bots():
         for b in info.get("bots", []):
             token = b["token"]; bot_username = b["bot_username"]
             try:
-                app = Application.builder().token(token).build()
+                app = build_application(token)
                 app.add_handler(CommandHandler("start", subbot_start))
                 # 处理普通消息
                 app.add_handler(MessageHandler(filters.ALL, partial(handle_message, owner_id=int(owner_id), bot_username=bot_username)))
@@ -2347,7 +3263,7 @@ async def run_all_bots():
                 logger.error(f"子Bot启动失败: @{bot_username} {e}")
 
     # 管理 Bot
-    manager_app = Application.builder().token(MANAGER_TOKEN).build()
+    manager_app = build_application(MANAGER_TOKEN)
     manager_app.add_handler(CommandHandler("start", manager_start))
     # 添加欢迎语设置相关的命令处理器
     async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2397,6 +3313,35 @@ async def run_all_bots():
     manager_app.add_handler(CommandHandler("clear", handle_clear))
     manager_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, token_listener))
     manager_app.add_handler(CallbackQueryHandler(callback_handler))
+
+    async def periodic_db_cleanup(context: ContextTypes.DEFAULT_TYPE):
+        """周期清理数据库过期数据，并回收内存映射。"""
+        try:
+            deleted_mappings = db.cleanup_old_mappings(30)
+            deleted_pending = db.cleanup_old_pending_verifications(24)
+            deleted_tokens = db.cleanup_expired_tokens()
+
+            if deleted_mappings or deleted_pending or deleted_tokens:
+                load_map()
+                logger.info(
+                    "🧹 周期清理完成: mappings=%s, pending=%s, tokens=%s",
+                    deleted_mappings,
+                    deleted_pending,
+                    deleted_tokens,
+                )
+        except Exception as e:
+            logger.error(f"周期清理任务失败: {e}")
+
+    if manager_app.job_queue:
+        manager_app.job_queue.run_repeating(
+            periodic_db_cleanup,
+            interval=6 * 60 * 60,
+            first=5 * 60,
+            name="periodic_db_cleanup",
+        )
+    else:
+        logger.warning("⚠️ JobQueue 不可用，跳过周期清理任务")
+
     running_apps["__manager__"] = manager_app
 
     await manager_app.initialize(); await manager_app.start(); await manager_app.updater.start_polling()

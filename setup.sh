@@ -2,10 +2,18 @@
 set -e
 
 APP_DIR="/opt/tg_multi_bot"
+SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="tg_multi_bot"
 SCRIPT_NAME="host_bot.py"
-SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/host_bot.py"
-DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/main/database.py"
+SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/host_bot.py"
+DATABASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/database.py"
+VERIFY_SCRIPT_NAME="verify_server.py"
+VERIFY_SERVICE_NAME="tg_verify_server"
+VERIFY_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/verify_server.py"
+BACKUP_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/backup.sh"
+RESTORE_SCRIPT_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/restore.sh"
+# 模板文件基础URL (假设在 templates 目录下)
+TEMPLATES_BASE_URL="https://raw.githubusercontent.com/ryty1/TG_Talk/v1.0.3/templates"
 
 function check_and_install() {
   PKG=$1
@@ -133,106 +141,16 @@ function setup_github_backup() {
     return 1
   fi
   
-  # 创建备份脚本
-  cat <<'BACKUP_SCRIPT' > "$APP_DIR/backup.sh"
-#!/bin/bash
-set -e
-
-APP_DIR="/opt/tg_multi_bot"
-BACKUP_DIR="$APP_DIR/backup_temp"
-DATE=$(date +%Y-%m-%d_%H-%M-%S)
-
-# 加载环境变量
-source "$APP_DIR/.env"
-
-# 检查必要的环境变量
-if [ -z "$GH_USERNAME" ] || [ -z "$GH_REPO" ] || [ -z "$GH_TOKEN" ]; then
-  echo "❌ GitHub 配置缺失，请检查 .env 文件"
-  exit 1
-fi
-
-# 创建临时备份目录
-mkdir -p "$BACKUP_DIR"
-cd "$BACKUP_DIR"
-
-# 初始化 Git（如果还没有）
-if [ ! -d ".git" ]; then
-  git init -b main
-  git config user.name "TG Bot Backup"
-  git config user.email "backup@bot.local"
-  git remote add origin "https://$GH_TOKEN@github.com/$GH_USERNAME/$GH_REPO.git" 2>/dev/null || \
-  git remote set-url origin "https://$GH_TOKEN@github.com/$GH_USERNAME/$GH_REPO.git"
-fi
-
-# 复制数据库文件
-echo "📦 备份数据文件..."
-if [ -f "$APP_DIR/bot_data.db" ]; then
-  cp -f "$APP_DIR/bot_data.db" . 2>/dev/null && echo "  ✅ bot_data.db（数据库）"
-else
-  echo "  ⚠️ 未找到数据库文件 bot_data.db"
-fi
-
-# 备份配置文件
-echo "⚙️ 备份配置文件..."
-cp -f "$APP_DIR/.env" . 2>/dev/null || echo "# Empty" > .env
-
-# 备份脚本文件
-echo "📜 备份脚本文件..."
-cp -f "$APP_DIR/host_bot.py" . 2>/dev/null || touch host_bot.py
-cp -f "$APP_DIR/database.py" . 2>/dev/null && echo "  ✅ database.py"
-
-# 创建备份信息文件
-cat <<EOF > backup_info.txt
-备份时间: $DATE
-服务器: $(hostname)
-Python版本: $(python3 --version 2>&1)
-备份内容:
-  - 数据库文件: bot_data.db
-  - 配置文件: .env
-  - 脚本文件: host_bot.py, database.py
-EOF
-
-# 提交到 GitHub
-git add .
-if git diff --cached --quiet; then
-  echo "✅ 数据无变化，跳过备份"
-  # 只在非静默模式下发送通知
-  if [ -z "$SILENT_BACKUP" ] && [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
-    curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
-      -d chat_id="$ADMIN_CHANNEL" \
-      -d text="📦 自动备份提醒%0A%0A⏰ 时间: $DATE%0A📊 状态: 数据无变化%0A📂 仓库: $GH_USERNAME/$GH_REPO" \
-      >/dev/null 2>&1
-  fi
-else
-  git commit -m "自动备份 - $DATE" >/dev/null 2>&1
-  
-  # 强制推送（避免冲突）
-  git push -f origin main >/dev/null 2>&1
-  
-  if [ $? -eq 0 ]; then
-    echo "✅ 备份成功推送到 GitHub ($DATE)"
-    
-    # 只在非静默模式下发送成功通知
-    if [ -z "$SILENT_BACKUP" ] && [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
-      curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
-        -d chat_id="$ADMIN_CHANNEL" \
-        -d text="✅ 自动备份成功%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A📦 状态: 已推送到 GitHub" \
-        >/dev/null 2>&1
-    fi
+  # 创建备份脚本（优先使用本地模板，找不到则从远程下载）
+  if [ -f "$SETUP_DIR/backup.sh" ]; then
+    cp -f "$SETUP_DIR/backup.sh" "$APP_DIR/backup.sh"
+    echo "✅ 使用本地 backup.sh 模板"
+  elif curl -sL -o "$APP_DIR/backup.sh" "$BACKUP_SCRIPT_URL"; then
+    echo "✅ 已从远程下载 backup.sh"
   else
-    echo "❌ 推送失败，请检查 GitHub Token 权限"
-    
-    # 只在非静默模式下发送失败通知
-    if [ -z "$SILENT_BACKUP" ] && [ -n "$MANAGER_TOKEN" ] && [ -n "$ADMIN_CHANNEL" ]; then
-      curl -s -X POST "https://api.telegram.org/bot$MANAGER_TOKEN/sendMessage" \
-        -d chat_id="$ADMIN_CHANNEL" \
-        -d text="❌ 自动备份失败%0A%0A⏰ 时间: $DATE%0A📂 仓库: $GH_USERNAME/$GH_REPO%0A⚠️ 原因: GitHub 推送失败" \
-        >/dev/null 2>&1
-    fi
-    exit 1
+    echo "❌ 创建 backup.sh 失败，请检查网络或手动放置脚本"
+    return 1
   fi
-fi
-BACKUP_SCRIPT
 
   # 设置脚本权限
   chmod +x "$APP_DIR/backup.sh"
@@ -376,218 +294,16 @@ EOF
 }
 
 function setup_restore_script() {
-  # 创建恢复脚本
-  cat <<'RESTORE_SCRIPT' > "$APP_DIR/restore.sh"
-#!/bin/bash
-set -e
-
-APP_DIR="/opt/tg_multi_bot"
-BACKUP_DIR="$APP_DIR/backup_temp"
-SERVICE_NAME="tg_multi_bot"
-
-# 加载环境变量
-if [ -f "$APP_DIR/.env" ]; then
-  source "$APP_DIR/.env"
-else
-  echo "❌ 未找到 .env 文件"
-  exit 1
-fi
-
-# 检查必要的环境变量
-if [ -z "$GH_USERNAME" ] || [ -z "$GH_REPO" ] || [ -z "$GH_TOKEN" ]; then
-  echo "❌ GitHub 配置缺失，请先配置 GitHub 自动备份"
-  exit 1
-fi
-
-echo "============================"
-echo "   从 GitHub 恢复备份"
-echo "============================"
-echo ""
-echo "⚠️  警告：此操作将覆盖当前数据！"
-echo "📦 仓库: https://github.com/$GH_USERNAME/$GH_REPO"
-echo ""
-
-# 克隆或拉取 GitHub 仓库（先拉取以显示备份信息）
-echo "📥 从 GitHub 拉取备份数据..."
-if [ -d "$BACKUP_DIR/.git" ]; then
-  cd "$BACKUP_DIR"
-  git fetch origin >/dev/null 2>&1
-  git reset --hard origin/main >/dev/null 2>&1
-else
-  rm -rf "$BACKUP_DIR"
-  git clone -b main "https://$GH_TOKEN@github.com/$GH_USERNAME/$GH_REPO.git" "$BACKUP_DIR" >/dev/null 2>&1
-  cd "$BACKUP_DIR"
-fi
-
-# 显示备份信息
-if [ -f "$BACKUP_DIR/backup_info.txt" ]; then
-  echo ""
-  echo "📋 备份信息："
-  cat "$BACKUP_DIR/backup_info.txt"
-  echo ""
-fi
-
-# 恢复选项
-echo "============================"
-echo "   请选择要恢复的内容"
-echo "============================"
-echo ""
-echo "1) 仅恢复数据文件 (bot_data.db)"
-echo "2) 恢复数据库 + 配置文件 (.env)"
-echo "3) 恢复数据库 + 脚本文件 (host_bot.py, database.py)"
-echo "4) 恢复全部 (数据 + 配置 + 脚本)"
-echo "5) 自定义选择"
-echo "0) 取消操作"
-echo ""
-read -p "请选择 [0-5]: " RESTORE_OPTION
-
-case "$RESTORE_OPTION" in
-  0)
-    echo "❌ 操作已取消"
-    exit 0
-    ;;
-  1)
-    RESTORE_DATA=true
-    RESTORE_ENV=false
-    RESTORE_SCRIPT=false
-    ;;
-  2)
-    RESTORE_DATA=true
-    RESTORE_ENV=true
-    RESTORE_SCRIPT=false
-    ;;
-  3)
-    RESTORE_DATA=true
-    RESTORE_ENV=false
-    RESTORE_SCRIPT=true
-    ;;
-  4)
-    RESTORE_DATA=true
-    RESTORE_ENV=true
-    RESTORE_SCRIPT=true
-    ;;
-  5)
-    echo ""
-    read -p "恢复数据文件(bot_data.db)？[Y/n]: " ans_data
-    RESTORE_DATA=true
-    [[ "$ans_data" =~ ^[Nn]$ ]] && RESTORE_DATA=false
-    
-    read -p "恢复配置文件 (.env)？[y/N]: " ans_env
-    RESTORE_ENV=false
-    [[ "$ans_env" =~ ^[Yy]$ ]] && RESTORE_ENV=true
-    
-    read -p "恢复脚本文件 (host_bot.py, database.py)？[y/N]: " ans_script
-    RESTORE_SCRIPT=false
-    [[ "$ans_script" =~ ^[Yy]$ ]] && RESTORE_SCRIPT=true
-    ;;
-  *)
-    echo "❌ 无效选择"
-    exit 1
-    ;;
-esac
-
-# 确认操作
-echo ""
-echo "将要恢复的内容："
-$RESTORE_DATA && echo "  ✅ 数据库文件 (bot_data.db)"
-$RESTORE_ENV && echo "  ✅ 配置文件 (.env)"
-$RESTORE_SCRIPT && echo "  ✅ 脚本文件 (host_bot.py, database.py)"
-echo ""
-read -p "确认恢复？[y/N]: " CONFIRM
-
-if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-  echo "❌ 操作已取消"
-  exit 0
-fi
-
-echo ""
-echo "🛑 停止服务..."
-systemctl stop $SERVICE_NAME.service 2>/dev/null || true
-
-# 备份当前数据（以防万一）
-BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_OLD_DIR="$APP_DIR/backup_before_restore_$BACKUP_TIMESTAMP"
-mkdir -p "$BACKUP_OLD_DIR"
-
-echo "💾 备份当前数据到: $BACKUP_OLD_DIR"
-cp -f "$APP_DIR/bot_data.db" "$BACKUP_OLD_DIR/" 2>/dev/null || true
-cp -f "$APP_DIR/.env" "$BACKUP_OLD_DIR/" 2>/dev/null || true
-cp -f "$APP_DIR/host_bot.py" "$BACKUP_OLD_DIR/" 2>/dev/null || true
-cp -f "$APP_DIR/database.py" "$BACKUP_OLD_DIR/" 2>/dev/null || true
-
-# 恢复文件
-echo ""
-echo "🔄 开始恢复..."
-RESTORED_COUNT=0
-
-# 恢复数据库文件
-if [ "$RESTORE_DATA" = true ]; then
-  echo "📦 恢复数据库文件..."
-  
-  if [ -f "$BACKUP_DIR/bot_data.db" ]; then
-    cp -f "$BACKUP_DIR/bot_data.db" "$APP_DIR/"
-    echo "  ✅ bot_data.db"
-    RESTORED_COUNT=$((RESTORED_COUNT + 1))
+  # 创建恢复脚本（优先使用本地模板，找不到则从远程下载）
+  if [ -f "$SETUP_DIR/restore.sh" ]; then
+    cp -f "$SETUP_DIR/restore.sh" "$APP_DIR/restore.sh"
+    echo "✅ 使用本地 restore.sh 模板"
+  elif curl -sL -o "$APP_DIR/restore.sh" "$RESTORE_SCRIPT_URL"; then
+    echo "✅ 已从远程下载 restore.sh"
   else
-    echo "  ⚠️ 备份中未找到 bot_data.db"
+    echo "❌ 创建 restore.sh 失败，请检查网络或手动放置脚本"
+    return 1
   fi
-fi
-
-# 恢复配置文件
-if [ "$RESTORE_ENV" = true ]; then
-  echo "⚙️ 恢复配置文件..."
-  
-  if [ -f "$BACKUP_DIR/.env" ]; then
-    cp -f "$BACKUP_DIR/.env" "$APP_DIR/"
-    echo "  ✅ .env"
-    RESTORED_COUNT=$((RESTORED_COUNT + 1))
-  else
-    echo "  ⚠️ 备份中未找到 .env 文件"
-  fi
-fi
-
-# 恢复脚本文件
-if [ "$RESTORE_SCRIPT" = true ]; then
-  echo "📜 恢复脚本文件..."
-  
-  if [ -f "$BACKUP_DIR/host_bot.py" ]; then
-    cp -f "$BACKUP_DIR/host_bot.py" "$APP_DIR/"
-    echo "  ✅ host_bot.py"
-    RESTORED_COUNT=$((RESTORED_COUNT + 1))
-  else
-    echo "  ⚠️ 备份中未找到 host_bot.py 文件"
-  fi
-  
-  if [ -f "$BACKUP_DIR/database.py" ]; then
-    cp -f "$BACKUP_DIR/database.py" "$APP_DIR/"
-    echo "  ✅ database.py"
-    RESTORED_COUNT=$((RESTORED_COUNT + 1))
-  fi
-fi
-
-echo ""
-echo "🚀 重启服务..."
-systemctl start $SERVICE_NAME.service
-
-# 清理临时恢复目录
-echo "🧹 清理临时文件..."
-rm -rf "$BACKUP_DIR"
-
-if [ $RESTORED_COUNT -gt 0 ]; then
-  echo ""
-  echo "============================"
-  echo "   恢复完成！"
-  echo "============================"
-  echo "✅ 已恢复 $RESTORED_COUNT 个文件"
-  echo "💾 原数据备份于: $BACKUP_OLD_DIR"
-  echo "🔧 服务已重启"
-  echo "🧹 临时文件已清理"
-  echo "============================"
-else
-  echo "⚠️ 未恢复任何文件"
-  systemctl start $SERVICE_NAME.service
-fi
-RESTORE_SCRIPT
 
   chmod +x "$APP_DIR/restore.sh"
   echo "✅ 恢复脚本已创建: $APP_DIR/restore.sh"
@@ -647,6 +363,31 @@ function install_bot() {
     exit 1
   fi
 
+  # 下载 verify_server.py
+  echo "  • 下载 $VERIFY_SCRIPT_NAME ..."
+  if curl -sL -o "$VERIFY_SCRIPT_NAME" "$VERIFY_SCRIPT_URL"; then
+    echo "    ✅ $VERIFY_SCRIPT_NAME"
+  else
+    echo "    ❌ $VERIFY_SCRIPT_NAME 下载失败，将创建一个空文件待手动上传"
+    touch "$VERIFY_SCRIPT_NAME"
+  fi
+
+  # 创建模板目录并下载模板
+  echo "📂 创建模板目录..."
+  mkdir -p "$APP_DIR/templates"
+  
+  echo "  • 下载 HTML 模板..."
+  # 模板文件列表
+  TEMPLATES=("verify.html" "success.html" "error.html")
+  
+  for tmpl in "${TEMPLATES[@]}"; do
+      if curl -sL -o "$APP_DIR/templates/$tmpl" "$TEMPLATES_BASE_URL/$tmpl"; then
+        echo "    ✅ templates/$tmpl"
+      else
+        echo "    ⚠️ templates/$tmpl 下载失败，请手动上传"
+      fi
+  done
+
   echo "🐍 创建虚拟环境..."
   # 清理可能存在的失败虚拟环境
   if [ -d venv ] && [ ! -f venv/bin/activate ]; then
@@ -695,6 +436,10 @@ function install_bot() {
   else
     echo "✅ 已安装 python-dotenv，跳过"
   fi
+  
+  # 安装 verify_server 依赖
+  echo "📦 安装 Flask (用于验证服务器) ..."
+  pip install -q flask requests
 
   # ------------------ 环境变量 ------------------
   echo "⚙️ 生成环境变量 (.env)..."
@@ -718,15 +463,49 @@ function install_bot() {
       fi
   done
 
+  echo ""
+  echo "🔐 配置 Cloudflare Turnstile (可选，用于增强验证)"
+  read -p "请输入 CF Site Key (留空跳过): " CF_SITE_KEY
+  if [ -n "$CF_SITE_KEY" ]; then
+      read -p "请输入 CF Secret Key: " CF_SECRET_KEY
+      # 验证服务器 URL
+      read -p "请输入验证服务器 URL (例如 https://verify.example.com，不带结尾斜杠): " VERIFY_URL
+      if [ -z "$VERIFY_URL" ]; then
+          # 尝试自动获取 IP
+          PUBLIC_IP=$(curl -s ifconfig.me)
+          VERIFY_URL="http://$PUBLIC_IP"
+          echo "⚠️ 未输入 URL，默认使用 http://$PUBLIC_IP"
+      fi
+
+      # 验证服务器端口
+      read -p "请输入验证服务器端口 (默认 80): " VERIFY_PORT
+      if [ -z "$VERIFY_PORT" ]; then
+          VERIFY_PORT=80
+      fi
+  else
+      CF_SECRET_KEY=""
+      VERIFY_URL="http://localhost:80"
+      VERIFY_PORT=80
+      echo "ℹ️ 跳过 CF 配置，使用默认值"
+  fi
+
   # 写入 .env
   cat <<EOF > .env
 MANAGER_TOKEN=$MANAGER_TOKEN
 ADMIN_CHANNEL=$ADMIN_CHANNEL
+
+# Cloudflare Turnstile 配置
+CF_TURNSTILE_SITE_KEY=$CF_SITE_KEY
+CF_TURNSTILE_SECRET_KEY=$CF_SECRET_KEY
+
+# 验证服务器配置
+VERIFY_SERVER_URL=$VERIFY_URL
+VERIFY_SERVER_PORT=$VERIFY_PORT
 EOF
   echo "✅ 已生成 .env 配置文件"
 
   # ------------------ Systemd 服务 ------------------
-  echo "🛠️ 配置 systemd 服务..."
+  echo "🛠️ 配置 systemd 服务 (Host Bot)..."
   cat <<EOF >/etc/systemd/system/$SERVICE_NAME.service
 [Unit]
 Description=Telegram Multi Bot Host
@@ -744,10 +523,36 @@ EnvironmentFile=$APP_DIR/.env
 WantedBy=multi-user.target
 EOF
 
-  echo "🚀 启动并设置开机自启..."
+  echo "�️ 配置 systemd 服务 (Verify Server)..."
+  cat <<EOF >/etc/systemd/system/$VERIFY_SERVICE_NAME.service
+[Unit]
+Description=Telegram Verify Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+ExecStart=$APP_DIR/venv/bin/python $APP_DIR/$VERIFY_SCRIPT_NAME
+Restart=always
+RestartSec=3
+EnvironmentFile=$APP_DIR/.env
+# Flask on port 80 requires root or capabilities. 
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  echo "�🚀 启动并设置开机自启..."
   systemctl daemon-reload >/dev/null 2>&1
+  
+  # Host Bot
   systemctl enable $SERVICE_NAME.service >/dev/null 2>&1
   systemctl restart $SERVICE_NAME.service >/dev/null 2>&1
+  
+  # Verify Server
+  systemctl enable $VERIFY_SERVICE_NAME.service >/dev/null 2>&1
+  systemctl restart $VERIFY_SERVICE_NAME.service >/dev/null 2>&1
 
   echo ""
   echo "✅ 部署完成！"
@@ -772,8 +577,10 @@ EOF
   echo "============================"
   echo "   部署完成！"
   echo "============================"
-  echo "📊 查看日志: journalctl -u $SERVICE_NAME.service -f"
-  echo "🔧 服务管理: systemctl status/start/stop/restart $SERVICE_NAME"
+  echo "📊 查看日志 (Host): journalctl -u $SERVICE_NAME.service -f"
+  echo "� 查看日志 (Verify): journalctl -u $VERIFY_SERVICE_NAME.service -f"
+  echo "�🔧 服务管理 (Host): systemctl status/restart $SERVICE_NAME"
+  echo "🔧 服务管理 (Verify): systemctl status/restart $VERIFY_SERVICE_NAME"
   echo "📂 项目目录: $APP_DIR"
   if [[ "$SETUP_BACKUP" =~ ^[Yy]$ ]]; then
     echo "📦 备份脚本: $APP_DIR/backup.sh"
@@ -785,18 +592,24 @@ EOF
 function uninstall_bot() {
   echo "🛑 停止服务..."
   systemctl stop $SERVICE_NAME.service >/dev/null 2>&1 || true
+  systemctl stop $VERIFY_SERVICE_NAME.service >/dev/null 2>&1 || true
 
   echo "❌ 禁用开机自启..."
   systemctl disable $SERVICE_NAME.service >/dev/null 2>&1 || true
+  systemctl disable $VERIFY_SERVICE_NAME.service >/dev/null 2>&1 || true
 
   echo "🗑️ 删除 systemd 服务文件..."
   if [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
       rm -f "/etc/systemd/system/$SERVICE_NAME.service"
-      systemctl daemon-reload >/dev/null 2>&1
       echo "✅ 已删除 $SERVICE_NAME.service"
-  else
-      echo "⚠️ 没有找到 systemd 服务文件"
   fi
+  
+  if [ -f "/etc/systemd/system/$VERIFY_SERVICE_NAME.service" ]; then
+      rm -f "/etc/systemd/system/$VERIFY_SERVICE_NAME.service"
+      echo "✅ 已删除 $VERIFY_SERVICE_NAME.service"
+  fi
+  
+  systemctl daemon-reload >/dev/null 2>&1
 
   # 移除 cron 定时任务
   if crontab -l 2>/dev/null | grep -q "$APP_DIR/backup.sh"; then
