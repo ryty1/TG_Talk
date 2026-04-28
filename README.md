@@ -189,7 +189,7 @@ Bot: ✅ 已将用户 111111 从黑名单移除
 ├── backup.sh            # 备份脚本
 ├── restore.sh           # 恢复脚本
 ├── venv/                # Python 虚拟环境
-├── templates/
+├── templates/           # 前端文件
 │   ├── error.html
 │   ├── success.html
 │   └── verify.html
