@@ -187,7 +187,12 @@ Bot: ✅ 已将用户 111111 从黑名单移除
 ├── bot_data.db          # SQLite 数据库
 ├── .env                 # 环境配置
 ├── backup.sh            # 备份脚本
+├── restore.sh           # 恢复脚本
 ├── venv/                # Python 虚拟环境
+├── templates/
+│   ├── error.html
+│   ├── success.html
+│   └── verify.html
 └── backup_temp/         # 备份临时目录
 ```
 
