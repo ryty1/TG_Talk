@@ -31,21 +31,6 @@ bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/v1.0.
 - 🔄 **自动同步** - GitHub 自动备份，数据安全无忧
 - 👥 **管理员功能** - 用户清单、广播通知、清理失效Bot
 
-## 📦 部署方式对比
-
-| 特性 | Docker 部署 ⭐ | 传统部署 |
-|------|----------------|---------|
-| 支持系统 | Linux/Windows/macOS | 仅 Linux |
-| 部署时间 | ~3 分钟 | ~5 分钟 |
-| 环境隔离 | ✅ 完全隔离 | ❌ 依赖系统 |
-| 维护难度 | ⭐ 简单 | ⭐⭐ 中等 |
-| 更新方式 | `docker-compose pull && up -d` | 手动更新代码 |
-| 推荐场景 | 所有用户 | Linux 服务器专家 |
-
-**Docker 部署** 只需修改两个配置项（Bot Token 和频道 ID），无需关心 Python 版本、依赖安装等问题。
-
-**传统部署** 脚本会自动完成：检查/安装 Python 3.11+、安装依赖包、创建虚拟环境、配置 systemd 服务、设置 GitHub 自动备份（可选）。
-
 ## 📱 使用指南
 
 ### 用户操作流程
