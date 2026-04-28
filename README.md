@@ -4,34 +4,6 @@
 
 ## 🚀 快速部署
 
-### 方式 1：Docker 部署（⭐ 推荐）
-
-**三步快速开始：**
-
-```bash
-# 1. 下载配置文件
-mkdir tg_multi_bot && cd tg_multi_bot
-curl -O https://raw.githubusercontent.com/ryty1/TG_Talk/main/docker-compose.yml
-
-# 2. 编辑配置（修改 MANAGER_TOKEN 和 ADMIN_CHANNEL）
-nano docker-compose.yml
-
-# 3. 启动服务
-docker-compose up -d
-```
-
-**优势：**
-- ✅ 跨平台支持（Linux/Windows/macOS）
-- ✅ 环境隔离，无依赖冲突
-- ✅ 一键更新，轻松维护
-- ✅ 3分钟完成部署
-
-📖 [查看详细 Docker 部署文档](./README_DOCKER.md) | 📄 [快速入门指南](./QUICKSTART_DOCKER.md)
-
----
-
-### 方式 2：传统部署（仅 Linux）
-
 ```bash
 # 一键安装/卸载（安装后默认开启自启后台运行）
 bash <(curl -Ls https://raw.githubusercontent.com/ryty1/TG_Talk/refs/heads/v1.0.4/setup.sh)
