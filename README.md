@@ -168,6 +168,7 @@ Bot: ✅ 已将用户 111111 从黑名单移除
 | 查看日志 | `journalctl -u tg_multi_bot -f` |
 | 关闭自启 | `systemctl disable tg_multi_bot` |
 
+## 🛡 CF盾牌 验证服务
 | 功能 | 命令 |
 |------|------|
 | 验证服务 | `systemctl start tg_verify_server` |
