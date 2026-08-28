@@ -6,14 +6,16 @@ import random
 from datetime import datetime
 from functools import partial
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeChat
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeChat, Bot
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters
 )
 from telegram.request import HTTPXRequest
-from telegram.error import BadRequest
+from telegram.error import (
+    BadRequest, Conflict, Forbidden, InvalidToken, NetworkError, TimedOut, TelegramError
+)
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -458,6 +460,408 @@ def get_welcome_message(bot_username: str) -> str:
 def is_admin(user_id: int) -> bool:
     """检查用户是否为管理员"""
     return str(user_id) == str(ADMIN_CHANNEL)
+
+# ================== Bot 体检（失效检测） ==================
+HEALTH_OK = "ok"
+HEALTH_TOKEN_REVOKED = "token_revoked"        # Token 被吊销 / Bot 被删除
+HEALTH_FOREIGN_WEBHOOK = "foreign_webhook"    # 被别的平台用 Webhook 接走
+HEALTH_POLLING_CONFLICT = "polling_conflict"  # 被别的平台用轮询抢消息（409）
+HEALTH_OWNER_BLOCKED = "owner_blocked"        # 主人拉黑了宿主机器人
+HEALTH_OWNER_GONE = "owner_gone"              # 主人注销 / 从未与宿主机器人对话
+HEALTH_UNKNOWN = "unknown"                    # 网络异常，判定不了 —— 绝不清理
+
+# emoji, 名称, 说明, 是否可回收
+HEALTH_META = {
+    HEALTH_TOKEN_REVOKED: ("🚫", "Token已失效", "Token 被吊销或 Bot 已被删除", True),
+    HEALTH_FOREIGN_WEBHOOK: ("🌐", "已转到其他平台", "检测到外部 Webhook，消息不再进入本站", True),
+    HEALTH_POLLING_CONFLICT: ("⚔️", "消息被别处抢占", "同一 Token 在别的平台轮询（409 冲突）", True),
+    HEALTH_OWNER_BLOCKED: ("🙅", "主人已拉黑宿主", "已拉黑宿主机器人，广播必然失败", True),
+    HEALTH_OWNER_GONE: ("👻", "主人已注销/失联", "账号注销或已无法接收宿主机器人消息", True),
+    HEALTH_UNKNOWN: ("❓", "检测异常", "网络超时等原因无法判定，本次不清理", False),
+    HEALTH_OK: ("✅", "正常", "一切正常", False),
+}
+
+# 判定优先级：越靠前越"确定该删"
+HEALTH_ORDER = [
+    HEALTH_TOKEN_REVOKED, HEALTH_FOREIGN_WEBHOOK, HEALTH_POLLING_CONFLICT,
+    HEALTH_OWNER_BLOCKED, HEALTH_OWNER_GONE, HEALTH_UNKNOWN,
+]
+
+CONFLICT_ALERT_THRESHOLD = 5   # 累计多少次 409 才判定为被别处抢占
+HEALTH_CONCURRENCY = 8         # 体检并发数
+HEALTH_TIMEOUT = 15.0          # 单次 API 调用超时（比常规 60s 短，避免体检卡死）
+
+# 本进程内累计、尚未落库的 409 冲突次数
+polling_conflicts = {}
+
+
+def build_health_request() -> HTTPXRequest:
+    """体检专用的短超时请求客户端。"""
+    return HTTPXRequest(
+        connection_pool_size=1,
+        connect_timeout=10.0,
+        read_timeout=HEALTH_TIMEOUT,
+        write_timeout=HEALTH_TIMEOUT,
+        pool_timeout=HEALTH_TIMEOUT,
+    )
+
+
+def mask_token(text: str, token: str) -> str:
+    """避免把 Token 写进日志或发给管理员的消息。"""
+    if not text:
+        return ""
+    if token:
+        text = text.replace(token, "***")
+        if ":" in token:
+            text = text.replace(token.split(":", 1)[1], "***")
+    return text[:200]
+
+
+def make_polling_error_cb(bot_username: str):
+    """start_polling 的 error_callback：把 409 冲突等轮询异常记录下来。
+
+    409 Conflict 意味着同一个 Token 正在别的地方 getUpdates —— 也就是
+    用户把 Bot 又托管到了别的平台，却没有在这里解绑。
+    """
+    def _cb(exc: TelegramError) -> None:
+        if isinstance(exc, Conflict):
+            polling_conflicts[bot_username] = polling_conflicts.get(bot_username, 0) + 1
+            logger.warning(
+                f"⚔️ @{bot_username} getUpdates 冲突（本进程累计 {polling_conflicts[bot_username]} 次）"
+                f"，疑似同时托管在其他平台"
+            )
+        elif isinstance(exc, InvalidToken):
+            logger.error(f"🚫 @{bot_username} Token 已失效")
+        elif isinstance(exc, (TimedOut, NetworkError)):
+            logger.debug(f"网络波动 @{bot_username}: {exc}")
+        else:
+            logger.error(f"轮询异常 @{bot_username}: {type(exc).__name__}: {exc}")
+    return _cb
+
+
+def flush_polling_conflicts() -> int:
+    """把内存里的冲突计数写入数据库，返回本次落库的次数。"""
+    if not polling_conflicts:
+        return 0
+    pending = polling_conflicts.copy()
+    polling_conflicts.clear()
+    total = 0
+    for bot_username, count in pending.items():
+        if db.bump_conflict_count(bot_username, count):
+            total += count
+    return total
+
+
+async def probe_owner(manager_bot, owner_id, cache: dict):
+    """静默探测宿主机器人能否联系上该用户（不会给用户发任何消息）。
+
+    sendChatAction 不产生消息，但被拉黑/注销时同样返回 403。
+    """
+    key = str(owner_id)
+    if key in cache:
+        return cache[key]
+
+    result = (HEALTH_OK, "")
+    try:
+        await manager_bot.send_chat_action(chat_id=int(owner_id), action="typing")
+    except Forbidden as e:
+        msg = str(e)
+        low = msg.lower()
+        if "deactivated" in low:
+            result = (HEALTH_OWNER_GONE, "账号已注销")
+        elif "initiate conversation" in low:
+            result = (HEALTH_OWNER_GONE, "从未与宿主机器人对话")
+        else:
+            result = (HEALTH_OWNER_BLOCKED, msg[:120])
+    except BadRequest as e:
+        msg = str(e)
+        if "not found" in msg.lower():
+            result = (HEALTH_OWNER_GONE, "会话不存在")
+        else:
+            result = (HEALTH_UNKNOWN, msg[:120])
+    except (TimedOut, NetworkError) as e:
+        result = (HEALTH_UNKNOWN, f"网络异常: {str(e)[:80]}")
+    except Exception as e:
+        result = (HEALTH_UNKNOWN, f"{type(e).__name__}: {str(e)[:80]}")
+
+    cache[key] = result
+    return result
+
+
+async def diagnose_bot(bot_username, bot_info, running_tokens, conflict_counts,
+                       manager_bot, owner_cache):
+    """给单个 Bot 做体检，返回诊断结果字典。"""
+    token = bot_info.get('token') or ''
+    owner_id = bot_info.get('owner')
+    result = {
+        'bot_username': bot_username,
+        'owner': owner_id,
+        'status': HEALTH_OK,
+        'flags': [],
+        'detail': '',
+        'webhook_url': None,
+        'real_username': None,
+        'renamed': False,
+        'running': token in running_tokens,   # 本站是否正在轮询它
+        'conflicts': conflict_counts.get(bot_username, 0) + polling_conflicts.get(bot_username, 0),
+    }
+
+    if not token:
+        result['status'] = HEALTH_TOKEN_REVOKED
+        result['detail'] = "数据库中没有 Token"
+        return result
+
+    probe = Bot(token=token, request=build_health_request(),
+                get_updates_request=build_health_request())
+    try:
+        # 1) Token 还有效吗（initialize 内部会调用 getMe）
+        try:
+            await probe.initialize()
+            result['real_username'] = probe.bot.username
+        except InvalidToken:
+            result['status'] = HEALTH_TOKEN_REVOKED
+            result['detail'] = "Token 被吊销或 Bot 已被 @BotFather 删除"
+            return result
+        except Forbidden as e:
+            result['status'] = HEALTH_TOKEN_REVOKED
+            result['detail'] = mask_token(str(e), token)
+            return result
+        except (TimedOut, NetworkError) as e:
+            result['status'] = HEALTH_UNKNOWN
+            result['detail'] = f"网络异常: {mask_token(str(e), token)}"
+            return result
+        except Exception as e:
+            result['status'] = HEALTH_UNKNOWN
+            result['detail'] = f"{type(e).__name__}: {mask_token(str(e), token)}"
+            return result
+
+        # 2) 是不是被别的平台用 Webhook 接走了
+        #    本项目只用轮询，任何非空 Webhook 都来自外部平台
+        try:
+            info = await probe.get_webhook_info()
+            if info and info.url:
+                result['webhook_url'] = info.url
+                result['flags'].append(HEALTH_FOREIGN_WEBHOOK)
+                result['detail'] = f"外部 Webhook: {info.url[:90]}"
+        except (TimedOut, NetworkError):
+            pass
+        except Exception as e:
+            logger.debug(f"getWebhookInfo 失败 @{bot_username}: {mask_token(str(e), token)}")
+
+        # 3) 是不是被别的平台用轮询抢消息
+        if HEALTH_FOREIGN_WEBHOOK not in result['flags']:
+            if token in running_tokens:
+                # 本站正在轮询它，主动 getUpdates 会和自己冲突，只看累计计数
+                if result['conflicts'] >= CONFLICT_ALERT_THRESHOLD:
+                    result['flags'].append(HEALTH_POLLING_CONFLICT)
+                    result['detail'] = f"累计 {result['conflicts']} 次 409 冲突"
+            else:
+                # 本站没在轮询它，可以安全地探一次
+                try:
+                    await probe.get_updates(offset=-1, limit=1, timeout=0)
+                except Conflict as e:
+                    result['flags'].append(HEALTH_POLLING_CONFLICT)
+                    result['detail'] = mask_token(str(e), token)
+                except (TimedOut, NetworkError):
+                    pass
+                except Exception as e:
+                    logger.debug(f"getUpdates 探测失败 @{bot_username}: {mask_token(str(e), token)}")
+
+        # 4) 主人还联系得上吗（广播失败的那批人就在这里）
+        owner_status, owner_detail = await probe_owner(manager_bot, owner_id, owner_cache)
+        if owner_status in (HEALTH_OWNER_BLOCKED, HEALTH_OWNER_GONE):
+            result['flags'].append(owner_status)
+            if not result['detail']:
+                result['detail'] = owner_detail
+
+        # 5) Bot 改名了 —— 数据库里的记录已经是旧名字
+        if result['real_username'] and result['real_username'] != bot_username:
+            result['renamed'] = True
+    finally:
+        try:
+            await probe.shutdown()
+        except Exception:
+            pass
+
+    for status in HEALTH_ORDER:
+        if status in result['flags']:
+            result['status'] = status
+            break
+
+    return result
+
+
+async def run_health_check(manager_bot, progress_cb=None):
+    """给所有托管 Bot 做体检，返回诊断结果列表。"""
+    all_bots = db.get_all_bots()
+    total = len(all_bots)
+    conflict_counts = db.get_conflict_counts()
+
+    # 用 Token 而不是用户名判断"本站是否正在轮询"，Bot 改名也不会误判
+    running_tokens = set()
+    for name, app in running_apps.items():
+        if name == "__manager__":
+            continue
+        try:
+            running_tokens.add(app.bot.token)
+        except Exception:
+            pass
+
+    owner_cache = {}
+    sem = asyncio.Semaphore(HEALTH_CONCURRENCY)
+    done = 0
+
+    async def worker(name, info):
+        nonlocal done
+        async with sem:
+            try:
+                res = await diagnose_bot(name, info, running_tokens, conflict_counts,
+                                         manager_bot, owner_cache)
+            except Exception as e:
+                logger.error(f"体检 @{name} 出错: {e}")
+                res = {
+                    'bot_username': name, 'owner': info.get('owner'),
+                    'status': HEALTH_UNKNOWN, 'flags': [], 'detail': f"体检出错: {e}",
+                    'webhook_url': None, 'real_username': None, 'renamed': False,
+                    'running': (info.get('token') or '') in running_tokens,
+                    'conflicts': 0,
+                }
+            db.update_bot_health(name, res['status'], res.get('detail', ''),
+                                 res.get('webhook_url'))
+            done += 1
+            if progress_cb:
+                await progress_cb(done, total)
+            return res
+
+    results = await asyncio.gather(*(worker(n, i) for n, i in all_bots.items()))
+    return list(results)
+
+
+async def health_report_expired(query):
+    """体检结果丢失（如进程重启）时提示重新体检。"""
+    try:
+        await query.message.edit_text(
+            "⚠️ 体检结果已过期，请重新体检。",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🩺 重新体检", callback_data="admin_clean_invalid")],
+                [InlineKeyboardButton("🔙 返回", callback_data="back_home")],
+            ])
+        )
+    except Exception:
+        pass
+
+
+def group_health_results(results):
+    """按状态分组，顺序与 HEALTH_ORDER 一致。"""
+    grouped = {status: [] for status in HEALTH_ORDER}
+    grouped[HEALTH_OK] = []
+    for res in results:
+        grouped.setdefault(res['status'], []).append(res)
+    return grouped
+
+
+def is_recyclable(status: str) -> bool:
+    """该状态是否属于"可清理"。"""
+    return bool(HEALTH_META.get(status, ("", "", "", False))[3])
+
+
+def select_health_targets(results, key: str):
+    """按分类挑出待清理的 Bot；key == 'all' 表示所有可清理的。"""
+    if key == "all":
+        return [r for r in results if is_recyclable(r['status'])]
+    if not is_recyclable(key):
+        return []
+    return [r for r in results if r['status'] == key]
+
+
+def render_health_report(results, elapsed: int = None):
+    """生成体检报告文本与按钮。"""
+    grouped = group_health_results(results)
+    recyclable = [r for r in results if is_recyclable(r['status'])]
+
+    head = f"🩺 体检报告（{len(results)} 个 Bot"
+    if elapsed is not None:
+        head += f" · 耗时 {elapsed}s"
+    text = head + "）\n\n"
+    text += f"✅ 正常: {len(grouped.get(HEALTH_OK, []))} 个\n"
+    for status in HEALTH_ORDER:
+        items = grouped.get(status, [])
+        if not items:
+            continue
+        emoji, label, _, _ = HEALTH_META[status]
+        text += f"{emoji} {label}: {len(items)} 个\n"
+
+    renamed = [r for r in results if r.get('renamed')]
+    if renamed:
+        text += f"✏️ 用户名已变更: {len(renamed)} 个（记录名与实际不一致）\n"
+
+    # 本站没在轮询、但也查不出别的毛病（多为启动失败），重启即可恢复
+    idle = [r for r in results if not r.get('running') and r['status'] in (HEALTH_OK, HEALTH_UNKNOWN)]
+    if idle:
+        text += f"⏸ 本站未在轮询: {len(idle)} 个（重启可恢复，不会被清理）\n"
+
+    text += f"\n♻️ 可清理: {len(recyclable)} 个\n"
+    unknown = grouped.get(HEALTH_UNKNOWN, [])
+    if unknown:
+        text += f"❓ {len(unknown)} 个因网络原因无法判定，本次不会被清理\n"
+    if not recyclable:
+        text += "\n🎉 没有需要清理的机器人。"
+
+    keyboard = []
+    for status in HEALTH_ORDER:
+        items = grouped.get(status, [])
+        if not items or not is_recyclable(status):
+            continue
+        emoji, label, _, _ = HEALTH_META[status]
+        keyboard.append([InlineKeyboardButton(
+            f"{emoji} 清理 {label} ({len(items)})", callback_data=f"hc_ask_{status}")])
+    if len(recyclable) > 1:
+        keyboard.append([InlineKeyboardButton(
+            f"🧨 清理全部可清理项 ({len(recyclable)})", callback_data="hc_ask_all")])
+    if any(r['status'] != HEALTH_OK or not r.get('running') for r in results):
+        keyboard.append([InlineKeyboardButton("📄 查看明细", callback_data="hc_detail_0")])
+    keyboard.append([InlineKeyboardButton("🔄 重新体检", callback_data="admin_clean_invalid")])
+    keyboard.append([InlineKeyboardButton("🔙 返回", callback_data="back_home")])
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+async def purge_bot(bot_username: str) -> bool:
+    """彻底移除一个 Bot：停止轮询 + 清理内存 + 清理数据库。"""
+    app = running_apps.pop(bot_username, None)
+    if app is not None:
+        try:
+            if app.updater and app.updater.running:
+                await app.updater.stop()
+            if app.running:
+                await app.stop()
+            await app.shutdown()
+        except Exception as e:
+            logger.warning(f"停止 @{bot_username} 失败（继续删除）: {e}")
+
+    # 清理内存里的映射
+    for owner_id, owner_data in list(bots_data.items()):
+        bots = owner_data.get("bots", [])
+        remaining = [b for b in bots if b.get("bot_username") != bot_username]
+        if len(remaining) != len(bots):
+            owner_data["bots"] = remaining
+        if not owner_data.get("bots"):
+            bots_data.pop(owner_id, None)
+
+    polling_conflicts.pop(bot_username, None)
+    msg_map.pop(bot_username, None)
+
+    return db.delete_bot(bot_username)
+
+
+def mark_owner_unreachable(owner_id, status: str, detail: str = ''):
+    """把某个用户名下所有 Bot 标记为"主人失联"，供清理功能使用。"""
+    try:
+        for bot in db.get_bots_by_owner(int(owner_id)):
+            db.update_bot_health(bot['bot_username'], status, detail, update_webhook=False)
+    except Exception as e:
+        logger.error(f"标记用户 {owner_id} 失联状态失败: {e}")
+
 
 def manager_main_menu(user_id: int):
     """生成主菜单（普通用户和管理员有不同选项）"""
@@ -1639,6 +2043,15 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 fail_count += 1
                 fail_users.append((owner_id, str(e)))
                 logger.error(f"广播失败 - 用户 {owner_id}: {e}")
+                # 把"联系不上"的用户记入健康状态，"清理失效Bot"就能一并清理
+                if isinstance(e, Forbidden):
+                    low = str(e).lower()
+                    if "deactivated" in low:
+                        mark_owner_unreachable(owner_id, HEALTH_OWNER_GONE, "账号已注销（广播时发现）")
+                    else:
+                        mark_owner_unreachable(owner_id, HEALTH_OWNER_BLOCKED, "已拉黑宿主机器人（广播时发现）")
+                elif isinstance(e, BadRequest) and "not found" in str(e).lower():
+                    mark_owner_unreachable(owner_id, HEALTH_OWNER_GONE, "会话不存在（广播时发现）")
             
             # 每10个用户更新一次状态
             if idx % 10 == 0:
@@ -1664,8 +2077,15 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result_text += "\n\n失败列表："
             for owner_id, reason in fail_users:
                 result_text += f"\n• ID:{owner_id} - {reason}"
-        
-        await status_msg.edit_text(result_text)
+
+        broadcast_markup = None
+        if fail_count:
+            result_text += "\n\n💡 联系不上的用户已被标记，点下方按钮可体检并清理。"
+            broadcast_markup = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🩺 体检并清理", callback_data="admin_clean_invalid")]]
+            )
+
+        await status_msg.edit_text(result_text, reply_markup=broadcast_markup)
         
         # 记录到管理频道
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1966,7 +2386,7 @@ async def token_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ 设置命令菜单失败: {e}")
     
-    await new_app.updater.start_polling()
+    await new_app.updater.start_polling(error_callback=make_polling_error_cb(bot_username))
 
     await update.message.reply_text(
         f"✅ 已添加并启动 Bot：@{bot_username}\n\n"
@@ -2432,141 +2852,233 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["waiting_broadcast"] = True
         return
     
-    # 清理失效Bot
+    # 清理失效Bot —— 先体检
     if data == "admin_clean_invalid":
         if not is_admin(query.from_user.id):
             await query.answer("⚠️ 仅管理员可用", show_alert=True)
             return
-        
+
         await query.message.edit_text(
-            "🗑️ 正在检测失效的机器人...\n\n"
+            "🩺 正在给所有托管机器人做体检...\n\n"
+            "检测项：\n"
+            "· Token 是否还有效\n"
+            "· 是否已被其他平台接走（Webhook / 轮询冲突）\n"
+            "· 主人是否还联系得上（拉黑 / 注销）\n\n"
             "请稍候..."
         )
-        
-        # 检测所有bot的token有效性
-        all_bots = db.get_all_bots()
-        invalid_bots = []
-        valid_count = 0
-        
-        for bot_username, bot_info in all_bots.items():
+
+        started = datetime.now()
+        last_shown = [0]
+
+        async def progress(done, total):
+            if done != total and done - last_shown[0] < 10:
+                return
+            last_shown[0] = done
             try:
-                # 尝试验证token
-                from telegram import Bot
-                test_bot = Bot(token=bot_info['token'])
-                await test_bot.get_me()
-                valid_count += 1
-            except Exception as e:
-                invalid_bots.append({
-                    'username': bot_username,
-                    'owner': bot_info['owner'],
-                    'token': bot_info['token'][:20] + "...",
-                    'error': str(e)
-                })
-        
-        if not invalid_bots:
+                await query.message.edit_text(f"🩺 体检中... {done}/{total}")
+            except Exception:
+                pass
+
+        try:
+            results = await run_health_check(context.bot, progress_cb=progress)
+        except Exception as e:
+            logger.error(f"体检失败: {e}")
             await query.message.edit_text(
-                f"✅ 检测完成\n\n"
-                f"有效机器人: {valid_count} 个\n"
-                f"失效机器人: 0 个\n\n"
-                f"🎉 所有机器人都正常！",
+                f"❌ 体检失败: {e}",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="back_home")]])
             )
             return
-        
-        # 显示失效bot列表
-        text = f"🗑️ 失效机器人列表\n\n"
-        text += f"✅ 有效: {valid_count} 个\n"
-        text += f"❌ 失效: {len(invalid_bots)} 个\n\n"
-        
-        for idx, bot in enumerate(invalid_bots[:10], 1):  # 最多显示10个
-            text += f"{idx}. @{bot['username']}\n"
-            text += f"   Owner ID: {bot['owner']}\n\n"
-        
-        if len(invalid_bots) > 10:
-            text += f"\n... 还有 {len(invalid_bots) - 10} 个\n"
-        
-        keyboard = [
-            [InlineKeyboardButton("🗑️ 删除所有失效Bot", callback_data="admin_confirm_clean")],
-            [InlineKeyboardButton("🔙 取消", callback_data="back_home")]
-        ]
-        
-        # 保存失效bot列表到上下文
-        context.user_data["invalid_bots"] = [bot['username'] for bot in invalid_bots]
-        
-        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+        context.user_data["health_report"] = results
+        elapsed = int((datetime.now() - started).total_seconds())
+        report_text, report_markup = render_health_report(results, elapsed)
+        await query.message.edit_text(report_text, reply_markup=report_markup)
         return
-    
-    # 确认删除失效Bot
-    if data == "admin_confirm_clean":
+
+    # 体检明细（分页）
+    if data.startswith("hc_detail_"):
         if not is_admin(query.from_user.id):
             await query.answer("⚠️ 仅管理员可用", show_alert=True)
             return
-        
-        invalid_bots = context.user_data.get("invalid_bots", [])
-        if not invalid_bots:
-            await query.answer("⚠️ 没有待清理的机器人", show_alert=True)
+
+        results = context.user_data.get("health_report")
+        if not results:
+            await health_report_expired(query)
             return
-        
-        await query.message.edit_text(
-            f"🗑️ 正在删除 {len(invalid_bots)} 个失效机器人...\n\n"
-            "请稍候..."
+
+        page = int(data.rsplit("_", 1)[1]) if data.rsplit("_", 1)[1].isdigit() else 0
+        page_size = 8
+        # 只列出有问题或本站未在轮询的，完全正常的不占篇幅
+        problems = [r for r in results if r['status'] != HEALTH_OK or not r.get('running')]
+        problems.sort(key=lambda r: HEALTH_ORDER.index(r['status']) if r['status'] in HEALTH_ORDER else 99)
+
+        if not problems:
+            report_text, report_markup = render_health_report(results)
+            await query.message.edit_text(report_text, reply_markup=report_markup)
+            return
+
+        total_pages = max(1, (len(problems) + page_size - 1) // page_size)
+        page = max(0, min(page, total_pages - 1))
+
+        text = f"📄 体检明细（{len(problems)} 个需要关注）\n📑 第 {page + 1}/{total_pages} 页\n\n"
+        for idx, res in enumerate(problems[page * page_size:(page + 1) * page_size], start=page * page_size + 1):
+            emoji, label, _, _ = HEALTH_META.get(res['status'], ("❔", res['status'], "", False))
+            text += f"{idx}. {emoji} @{res['bot_username']}\n"
+            text += f"   主人: <code>{res['owner']}</code> · {label}\n"
+            if res.get('renamed') and res.get('real_username'):
+                text += f"   ✏️ 实际用户名: @{res['real_username']}\n"
+            if not res.get('running') and res['status'] in (HEALTH_OK, HEALTH_UNKNOWN):
+                text += "   ⏸ 本站未在轮询（重启可恢复）\n"
+            if res.get('detail'):
+                text += f"   └ {res['detail'][:110]}\n"
+            text += "\n"
+
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"hc_detail_{page - 1}"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"hc_detail_{page + 1}"))
+        keyboard = [nav] if nav else []
+        keyboard.append([InlineKeyboardButton("🔙 返回报告", callback_data="hc_back_report")])
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        return
+
+    # 返回体检报告
+    if data == "hc_back_report":
+        if not is_admin(query.from_user.id):
+            await query.answer("⚠️ 仅管理员可用", show_alert=True)
+            return
+        results = context.user_data.get("health_report")
+        if not results:
+            await health_report_expired(query)
+            return
+        report_text, report_markup = render_health_report(results)
+        await query.message.edit_text(report_text, reply_markup=report_markup)
+        return
+
+    # 清理前确认
+    if data.startswith("hc_ask_"):
+        if not is_admin(query.from_user.id):
+            await query.answer("⚠️ 仅管理员可用", show_alert=True)
+            return
+
+        results = context.user_data.get("health_report")
+        if not results:
+            await health_report_expired(query)
+            return
+
+        key = data[len("hc_ask_"):]
+        targets = select_health_targets(results, key)
+        if not targets:
+            await query.answer("⚠️ 这一类已经没有可清理的了", show_alert=True)
+            report_text, report_markup = render_health_report(results)
+            await query.message.edit_text(report_text, reply_markup=report_markup)
+            return
+
+        if key == "all":
+            title = "全部可清理的机器人"
+        else:
+            emoji, label, desc, _ = HEALTH_META.get(key, ("❔", key, "", False))
+            title = f"{emoji} {label}（{desc}）"
+
+        text = f"⚠️ 确认清理\n\n{title}\n共 {len(targets)} 个：\n\n"
+        for res in targets[:8]:
+            text += f"• @{res['bot_username']} · 主人 <code>{res['owner']}</code>\n"
+        if len(targets) > 8:
+            text += f"... 还有 {len(targets) - 8} 个\n"
+        text += (
+            "\n将解绑并删除这些机器人的全部数据"
+            "（验证记录、黑名单、消息映射），此操作不可恢复。"
         )
-        
-        # 删除失效bot
-        deleted_count = 0
-        failed_count = 0
-        
-        for bot_username in invalid_bots:
+
+        keyboard = [
+            [InlineKeyboardButton(f"✅ 确认删除 {len(targets)} 个", callback_data=f"hc_do_{key}")],
+            [InlineKeyboardButton("🔙 返回报告", callback_data="hc_back_report")],
+        ]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        return
+
+    # 执行清理
+    if data.startswith("hc_do_"):
+        if not is_admin(query.from_user.id):
+            await query.answer("⚠️ 仅管理员可用", show_alert=True)
+            return
+
+        results = context.user_data.get("health_report")
+        if not results:
+            await health_report_expired(query)
+            return
+
+        key = data[len("hc_do_"):]
+        targets = select_health_targets(results, key)
+        if not targets:
+            await query.answer("⚠️ 这一类已经没有可清理的了", show_alert=True)
+            report_text, report_markup = render_health_report(results)
+            await query.message.edit_text(report_text, reply_markup=report_markup)
+            return
+
+        await query.message.edit_text(f"🗑️ 正在清理 {len(targets)} 个机器人...\n\n请稍候...")
+
+        deleted, failed = [], []
+        for res in targets:
             try:
-                # 从数据库删除
-                db.delete_bot(bot_username)
-                
-                # 从内存删除
-                all_bots = db.get_all_bots()
-                for owner_id, owner_data in list(bots_data.items()):
-                    owner_data['bots'] = [b for b in owner_data['bots'] if b['bot_username'] != bot_username]
-                    if not owner_data['bots']:
-                        del bots_data[owner_id]
-                
-                # 停止运行中的bot
-                if bot_username in running_apps:
-                    try:
-                        await running_apps[bot_username].stop()
-                        del running_apps[bot_username]
-                    except:
-                        pass
-                
-                deleted_count += 1
+                if await purge_bot(res['bot_username']):
+                    deleted.append(res)
+                else:
+                    failed.append((res['bot_username'], "数据库中已不存在"))
             except Exception as e:
-                failed_count += 1
-                logger.error(f"删除失效bot {bot_username} 失败: {e}")
-        
-        # 清理上下文
-        context.user_data.pop("invalid_bots", None)
-        
-        # 触发备份
+                failed.append((res['bot_username'], str(e)[:80]))
+                logger.error(f"清理 @{res['bot_username']} 失败: {e}")
+
+        # 从缓存的报告里移除已删除的，避免重复删除
+        removed_names = {res['bot_username'] for res in deleted}
+        context.user_data["health_report"] = [
+            r for r in results if r['bot_username'] not in removed_names
+        ]
+
         trigger_backup(silent=True)
-        
-        result_text = (
-            f"✅ 清理完成\n\n"
-            f"成功删除: {deleted_count} 个\n"
-            f"删除失败: {failed_count} 个\n\n"
-            f"已自动触发备份。"
-        )
-        
-        await query.message.edit_text(
-            result_text,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回", callback_data="back_home")]])
-        )
-        
-        # 记录到管理频道
+
+        # 按原因归类统计
+        reason_count = {}
+        for res in deleted:
+            reason_count[res['status']] = reason_count.get(res['status'], 0) + 1
+
+        text = f"✅ 清理完成\n\n成功删除: {len(deleted)} 个\n"
+        if failed:
+            text += f"删除失败: {len(failed)} 个\n"
+        if reason_count:
+            text += "\n按原因：\n"
+            for status, count in reason_count.items():
+                emoji, label, _, _ = HEALTH_META.get(status, ("❔", status, "", False))
+                text += f"{emoji} {label}: {count} 个\n"
+        if failed:
+            text += "\n失败列表：\n"
+            for name, reason in failed[:8]:
+                text += f"• @{name} - {reason}\n"
+        text += "\n已自动触发备份。"
+
+        keyboard = [
+            [InlineKeyboardButton("🔙 返回报告", callback_data="hc_back_report")],
+            [InlineKeyboardButton("🏠 主菜单", callback_data="back_home")],
+        ]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        await send_admin_log(
-            f"🗑️ 管理员清理失效Bot\n"
-            f"成功: {deleted_count} 个\n"
-            f"失败: {failed_count} 个\n"
-            f"时间: {now}"
-        )
+        log_lines = [f"🗑️ 管理员清理失效Bot", f"成功: {len(deleted)} 个 · 失败: {len(failed)} 个"]
+        for status, count in reason_count.items():
+            emoji, label, _, _ = HEALTH_META.get(status, ("❔", status, "", False))
+            log_lines.append(f"{emoji} {label}: {count}")
+        for res in deleted[:15]:
+            log_lines.append(f"· @{res['bot_username']} (主人 <code>{res['owner']}</code>)")
+        if len(deleted) > 15:
+            log_lines.append(f"... 还有 {len(deleted) - 15} 个")
+        log_lines.append(f"时间: {now}")
+        await send_admin_log("\n".join(log_lines))
+        return
+
+    # 兼容旧消息里的按钮
+    if data == "admin_confirm_clean":
+        await query.answer("⚠️ 请重新点击「清理失效Bot」执行体检", show_alert=True)
         return
 
     # 新增：处理拉黑/解除拉黑/取消验证按钮
@@ -3172,15 +3684,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
-            if bot_username in running_apps:
-                app = running_apps.pop(bot_username)
-                await app.updater.stop()
-                await app.stop()
-                await app.shutdown()
-            bots.remove(target_bot)
-            
-            # 💾 从数据库删除
-            db.delete_bot(bot_username)
+            # 停轮询 + 清内存 + 清数据库（与"清理失效Bot"走同一条路径）
+            await purge_bot(bot_username)
             save_bots()
             
             # 🔄 触发静默备份（不推送通知）
@@ -3257,7 +3762,7 @@ async def run_all_bots():
                 except Exception as cmd_err:
                     logger.error(f"❌ 设置命令菜单失败 @{bot_username}: {cmd_err}")
                 
-                await app.updater.start_polling()
+                await app.updater.start_polling(error_callback=make_polling_error_cb(bot_username))
                 logger.info(f"启动子Bot: @{bot_username}")
             except Exception as e:
                 logger.error(f"子Bot启动失败: @{bot_username} {e}")
@@ -3320,6 +3825,11 @@ async def run_all_bots():
             deleted_mappings = db.cleanup_old_mappings(30)
             deleted_pending = db.cleanup_old_pending_verifications(24)
             deleted_tokens = db.cleanup_expired_tokens()
+
+            # 把内存里累计的 409 冲突次数落库（供"清理失效Bot"判定）
+            flushed = flush_polling_conflicts()
+            if flushed:
+                logger.info(f"⚔️ 已记录 {flushed} 次 getUpdates 冲突")
 
             if deleted_mappings or deleted_pending or deleted_tokens:
                 load_map()

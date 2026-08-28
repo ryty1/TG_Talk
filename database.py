@@ -79,7 +79,21 @@ def init_database():
             cursor.execute('ALTER TABLE bots ADD COLUMN custom_captcha_hint TEXT')
         except sqlite3.OperationalError:
             pass  # 字段已存在
-        
+
+        # 1.2 健康状态字段（用于检测失效/被转移到其他平台的 Bot）
+        for _sql in (
+            'ALTER TABLE bots ADD COLUMN health_status TEXT',
+            'ALTER TABLE bots ADD COLUMN health_detail TEXT',
+            'ALTER TABLE bots ADD COLUMN last_check_at TIMESTAMP',
+            'ALTER TABLE bots ADD COLUMN webhook_url TEXT',
+            'ALTER TABLE bots ADD COLUMN conflict_count INTEGER DEFAULT 0',
+            'ALTER TABLE bots ADD COLUMN last_conflict_at TIMESTAMP',
+        ):
+            try:
+                cursor.execute(_sql)
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
         # 2. 已验证用户表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS verified_users (
@@ -465,20 +479,27 @@ def delete_bot(bot_username: str) -> bool:
         with db_lock:
             conn = get_connection()
             cursor = conn.cursor()
-            
+
             # 删除关联的已验证用户
             cursor.execute('DELETE FROM verified_users WHERE bot_username = ?', (bot_username,))
-            
+
             # 删除关联的消息映射
             cursor.execute('DELETE FROM message_mappings WHERE bot_username = ?', (bot_username,))
-            
+
+            # 删除关联的黑名单 / 待验证 / 验证链接（避免残留脏数据）
+            for _table in ('blacklist', 'pending_verifications', 'verification_tokens'):
+                try:
+                    cursor.execute(f'DELETE FROM {_table} WHERE bot_username = ?', (bot_username,))
+                except sqlite3.OperationalError:
+                    pass  # 表不存在（旧库）
+
             # 删除 Bot
             cursor.execute('DELETE FROM bots WHERE bot_username = ?', (bot_username,))
-            
-            conn.commit()
             affected = cursor.rowcount
+
+            conn.commit()
             conn.close()
-            
+
             if affected > 0:
                 logger.info(f"✅ 删除 Bot: {bot_username}")
                 return True
@@ -486,6 +507,120 @@ def delete_bot(bot_username: str) -> bool:
     except Exception as e:
         logger.error(f"❌ 删除 Bot 失败: {e}")
         return False
+
+
+# ================== Bot 健康状态 ==================
+def update_bot_health(bot_username: str, status: str, detail: str = '',
+                      webhook_url: str = None, update_webhook: bool = True) -> bool:
+    """记录一次体检结果（status 见 host_bot.HEALTH_* 常量）
+
+    update_webhook=False 时保留原有 webhook_url（例如只想更新"主人失联"状态）
+    """
+    try:
+        with db_lock:
+            conn = get_connection()
+            cursor = conn.cursor()
+            if update_webhook:
+                cursor.execute('''
+                    UPDATE bots
+                    SET health_status = ?, health_detail = ?, webhook_url = ?,
+                        last_check_at = CURRENT_TIMESTAMP
+                    WHERE bot_username = ?
+                ''', (status, (detail or '')[:300], webhook_url, bot_username))
+            else:
+                cursor.execute('''
+                    UPDATE bots
+                    SET health_status = ?, health_detail = ?,
+                        last_check_at = CURRENT_TIMESTAMP
+                    WHERE bot_username = ?
+                ''', (status, (detail or '')[:300], bot_username))
+            conn.commit()
+            conn.close()
+            return True
+    except Exception as e:
+        logger.error(f"❌ 更新 Bot 健康状态失败 {bot_username}: {e}")
+        return False
+
+
+def bump_conflict_count(bot_username: str, delta: int = 1) -> bool:
+    """累加 getUpdates 409 冲突次数（说明该 token 被别处同时拉取）"""
+    if delta <= 0:
+        return False
+    try:
+        with db_lock:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE bots
+                SET conflict_count = COALESCE(conflict_count, 0) + ?,
+                    last_conflict_at = CURRENT_TIMESTAMP
+                WHERE bot_username = ?
+            ''', (delta, bot_username))
+            conn.commit()
+            conn.close()
+            return True
+    except Exception as e:
+        logger.error(f"❌ 记录冲突次数失败 {bot_username}: {e}")
+        return False
+
+
+def reset_conflict_count(bot_username: str) -> bool:
+    """清零冲突计数（例如管理员确认该 Bot 已恢复正常）"""
+    try:
+        with db_lock:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                'UPDATE bots SET conflict_count = 0, last_conflict_at = NULL WHERE bot_username = ?',
+                (bot_username,)
+            )
+            conn.commit()
+            conn.close()
+            return True
+    except Exception as e:
+        logger.error(f"❌ 清零冲突次数失败 {bot_username}: {e}")
+        return False
+
+
+def get_bot_health(bot_username: str) -> Dict:
+    """读取单个 Bot 的健康信息"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT health_status, health_detail, last_check_at,
+                   webhook_url, conflict_count, last_conflict_at
+            FROM bots WHERE bot_username = ?
+        ''', (bot_username,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return {}
+        return {
+            'health_status': row['health_status'],
+            'health_detail': row['health_detail'],
+            'last_check_at': row['last_check_at'],
+            'webhook_url': row['webhook_url'],
+            'conflict_count': row['conflict_count'] or 0,
+            'last_conflict_at': row['last_conflict_at'],
+        }
+    except Exception as e:
+        logger.error(f"❌ 查询 Bot 健康信息失败 {bot_username}: {e}")
+        return {}
+
+
+def get_conflict_counts() -> Dict[str, int]:
+    """一次性取回所有 Bot 的冲突计数"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT bot_username, COALESCE(conflict_count, 0) AS c FROM bots')
+        rows = cursor.fetchall()
+        conn.close()
+        return {row['bot_username']: row['c'] for row in rows}
+    except Exception as e:
+        logger.error(f"❌ 查询冲突计数失败: {e}")
+        return {}
 def get_bots_by_owner(owner: int) -> List[Dict]:
     """获取某个用户的所有机器人"""
     try:
